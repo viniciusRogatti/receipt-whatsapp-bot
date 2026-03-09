@@ -714,6 +714,60 @@ const buildOrientedBase = (baseImage, rotation) => {
   };
 };
 
+const scalePixelBox = (box, scaleX, scaleY, maxWidth, maxHeight) => {
+  if (!box) return null;
+  const x = clampRegion(Math.floor(box.x * scaleX), 0, Math.max(0, maxWidth - 2));
+  const y = clampRegion(Math.floor(box.y * scaleY), 0, Math.max(0, maxHeight - 2));
+  const width = clampRegion(Math.max(2, Math.round(box.width * scaleX)), 2, Math.max(2, maxWidth - x));
+  const height = clampRegion(Math.max(2, Math.round(box.height * scaleY)), 2, Math.max(2, maxHeight - y));
+  return { x, y, width, height };
+};
+
+const scalePoint = (point, scaleX, scaleY, maxWidth, maxHeight) => {
+  if (!point) return null;
+  return {
+    x: clampRegion(Number((point.x * scaleX).toFixed(2)), 0, Math.max(0, maxWidth - 1)),
+    y: clampRegion(Number((point.y * scaleY).toFixed(2)), 0, Math.max(0, maxHeight - 1)),
+  };
+};
+
+const buildVariantAlignment = (orientedAlignment, variantImage) => {
+  const sourceWidth = Math.max(1, Number(orientedAlignment.normalized && orientedAlignment.normalized.width) || variantImage.bitmap.width);
+  const sourceHeight = Math.max(1, Number(orientedAlignment.normalized && orientedAlignment.normalized.height) || variantImage.bitmap.height);
+  const targetWidth = variantImage.bitmap.width;
+  const targetHeight = variantImage.bitmap.height;
+  const scaleX = targetWidth / sourceWidth;
+  const scaleY = targetHeight / sourceHeight;
+  const nfAnchor = orientedAlignment.nfAnchor || null;
+
+  return {
+    contourDetected: orientedAlignment.contour.contourDetected,
+    contourBounds: scalePixelBox(orientedAlignment.contour.bounds, scaleX, scaleY, targetWidth, targetHeight),
+    contourCorners: Array.isArray(orientedAlignment.contour.corners)
+      ? orientedAlignment.contour.corners.map((point) => scalePoint(point, scaleX, scaleY, targetWidth, targetHeight))
+      : null,
+    contourScore: orientedAlignment.contour.geometryScore,
+    templateMatched: orientedAlignment.templateMatched,
+    deskewAngle: orientedAlignment.deskew.angle,
+    warpApplied: orientedAlignment.warp.applied,
+    nfAnchor: nfAnchor
+      ? {
+        detected: !!nfAnchor.detected,
+        score: nfAnchor.score,
+        box: scalePixelBox(nfAnchor.box, scaleX, scaleY, targetWidth, targetHeight),
+        expectedBox: scalePixelBox(nfAnchor.expectedBox, scaleX, scaleY, targetWidth, targetHeight),
+      }
+      : null,
+    signatureCheck: orientedAlignment.signatureCheck
+      ? Object.assign({}, orientedAlignment.signatureCheck, {
+        roiBox: scalePixelBox(orientedAlignment.signatureCheck.roiBox, scaleX, scaleY, targetWidth, targetHeight),
+      })
+      : null,
+    normalizedWidth: targetWidth,
+    normalizedHeight: targetHeight,
+  };
+};
+
 const resolveOrientationCandidates = (baseImage, profile) => {
   if (profile !== 'local_fast') {
     return ORIENTATION_CANDIDATES;
@@ -786,6 +840,7 @@ module.exports = {
         normalizeLongestEdge(variantImage, edgeConfig);
         const variantId = `${orientationDefinition.id}__${variantProfile.id}`;
         const filePath = await persistVariant(variantImage, variantId, variantsDir);
+        const variantAlignment = buildVariantAlignment(orientedBase.alignment, variantImage);
 
         variants.push({
           id: variantId,
@@ -805,17 +860,17 @@ module.exports = {
             ...variantProfile.operations,
           ],
           alignment: {
-            contourDetected: orientedBase.alignment.contour.contourDetected,
-            contourBounds: orientedBase.alignment.contour.bounds,
-            contourCorners: orientedBase.alignment.contour.corners,
-            contourScore: orientedBase.alignment.contour.geometryScore,
-            templateMatched: orientedBase.alignment.templateMatched,
-            deskewAngle: orientedBase.alignment.deskew.angle,
-            warpApplied: orientedBase.alignment.warp.applied,
-            nfAnchor: orientedBase.alignment.nfAnchor,
-            signatureCheck: orientedBase.alignment.signatureCheck,
-            normalizedWidth: orientedBase.alignment.normalized.width,
-            normalizedHeight: orientedBase.alignment.normalized.height,
+            contourDetected: variantAlignment.contourDetected,
+            contourBounds: variantAlignment.contourBounds,
+            contourCorners: variantAlignment.contourCorners,
+            contourScore: variantAlignment.contourScore,
+            templateMatched: variantAlignment.templateMatched,
+            deskewAngle: variantAlignment.deskewAngle,
+            warpApplied: variantAlignment.warpApplied,
+            nfAnchor: variantAlignment.nfAnchor,
+            signatureCheck: variantAlignment.signatureCheck,
+            normalizedWidth: variantAlignment.normalizedWidth,
+            normalizedHeight: variantAlignment.normalizedHeight,
           },
           alignedFilePath,
           maskedFilePath,

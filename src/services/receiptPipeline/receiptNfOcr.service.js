@@ -42,7 +42,7 @@ const selectSourceVariants = ({ preprocess, orientationProbe, phase, fastMode = 
   const orientationIds = listOrientationIdsForNf({
     preprocess,
     orientationProbe,
-    limit: fastMode ? 1 : phase === 'primary' ? 3 : 2,
+    limit: fastMode ? 2 : phase === 'primary' ? 3 : 2,
   });
 
   orientationIds.forEach((orientationId) => {
