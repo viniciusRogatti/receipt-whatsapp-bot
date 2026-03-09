@@ -1,0 +1,7 @@
+node_modules/
+.env
+outputs/*
+!outputs/.gitkeep
+test-images/*
+!test-images/.gitkeep
+*.traineddata

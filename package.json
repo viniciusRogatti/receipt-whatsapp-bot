@@ -1,0 +1,26 @@
+{
+  "name": "receipt-whatsapp-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bot incremental para leitura de canhotos via imagem, com foco em NF-e e futura integracao com WhatsApp/API.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js",
+    "debug:ui": "node src/debug-server/server.js",
+    "test": "node src/tests/runUnitTests.js",
+    "test:local": "node src/tests/localImageRunner.js",
+    "test:unit": "node src/tests/runUnitTests.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "exif-parser": "^0.1.12",
+    "express": "^4.21.2",
+    "jimp": "^0.16.13",
+    "multer": "^2.0.2",
+    "tesseract.js": "^7.0.0"
+  }
+}
