@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const Jimp = require('jimp');
+const sharp = require('sharp');
 const ExifParser = require('exif-parser');
 const logger = require('../utils/logger');
 const { ensureDir } = require('../utils/file');
@@ -783,6 +784,36 @@ const resolveOrientationCandidates = (baseImage, profile) => {
     ));
 };
 
+const toJpegBase64 = async (pipeline) => {
+  const buffer = await pipeline.jpeg({ quality: 92 }).toBuffer();
+  return buffer.toString('base64');
+};
+
+async function processImageForOcr(imageBuffer) {
+  const baseImage = sharp(imageBuffer)
+    .rotate()
+    .resize({ width: 1800, withoutEnlargement: true })
+    .grayscale();
+
+  return {
+    original: await toJpegBase64(
+      sharp(imageBuffer)
+        .rotate()
+        .resize({ width: 1800, withoutEnlargement: true }),
+    ),
+    grayscale: await toJpegBase64(baseImage.clone()),
+    contrast: await toJpegBase64(
+      baseImage.clone().normalize(),
+    ),
+    binary: await toJpegBase64(
+      baseImage.clone()
+        .normalize()
+        .threshold(128)
+        .sharpen(),
+    ),
+  };
+}
+
 module.exports = {
   thresholdImage,
   adaptiveThresholdImage,
@@ -794,6 +825,7 @@ module.exports = {
   findReceiptBandBounds,
   findReceiptComponentBounds,
   focusDocument,
+  processImageForOcr,
   prepareBaseImage,
 
   async preprocessImage({ imagePath, outputDir, profile = 'debug' }) {

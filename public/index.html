@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KP Transportes - OCR Visualizador</title>
+  <style>
+    :root {
+      --bg: #f4f4f9;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --border: #dbe3ea;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .header h2 {
+      margin: 0 0 8px;
+    }
+
+    .header p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .upload-area {
+      background: var(--card);
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(15, 23, 42, 0.08);
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    input[type="file"] {
+      width: 100%;
+      max-width: 420px;
+    }
+
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+      margin-top: 12px;
+    }
+
+    button:hover {
+      background: var(--accent-dark);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.75;
+    }
+
+    .status {
+      margin-top: 12px;
+      min-height: 20px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: var(--card);
+      padding: 15px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(15, 23, 42, 0.08);
+    }
+
+    .card h3 {
+      margin-top: 0;
+      color: #333;
+      font-size: 16px;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 10px;
+    }
+
+    .card img {
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h2>Laboratorio de Leitura de Canhotos</h2>
+      <p>Compare rapidamente as variacoes preprocessadas antes do OCR.</p>
+    </div>
+
+    <div class="upload-area">
+      <input type="file" id="fileInput" accept="image/*">
+      <div>
+        <button id="uploadButton" type="button" onclick="uploadImage()">Analisar Canhoto</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="grid" id="results" style="display: none;">
+      <div class="card">
+        <h3>1. Imagem Original</h3>
+        <img id="img-original" src="" alt="Original">
+      </div>
+      <div class="card">
+        <h3>2. Escala de Cinza</h3>
+        <img id="img-gray" src="" alt="Cinza">
+      </div>
+      <div class="card">
+        <h3>3. Contraste Normalizado</h3>
+        <img id="img-contrast" src="" alt="Contraste">
+      </div>
+      <div class="card">
+        <h3>4. Binarizacao + Nitidez</h3>
+        <img id="img-binary" src="" alt="Binarizada">
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function uploadImage() {
+      const fileInput = document.getElementById('fileInput');
+      const results = document.getElementById('results');
+      const status = document.getElementById('status');
+      const button = document.getElementById('uploadButton');
+
+      if (!fileInput.files[0]) {
+        alert('Selecione uma imagem primeiro.');
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append('receipt', fileInput.files[0]);
+
+      results.style.display = 'none';
+      status.textContent = 'Processando imagem...';
+      button.disabled = true;
+
+      try {
+        const response = await fetch('/api/process', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Falha no processamento da imagem.');
+        }
+
+        document.getElementById('img-original').src = 'data:image/jpeg;base64,' + data.images.original;
+        document.getElementById('img-gray').src = 'data:image/jpeg;base64,' + data.images.grayscale;
+        document.getElementById('img-contrast').src = 'data:image/jpeg;base64,' + data.images.contrast;
+        document.getElementById('img-binary').src = 'data:image/jpeg;base64,' + data.images.binary;
+
+        results.style.display = 'grid';
+        status.textContent = 'Imagem processada com sucesso.';
+      } catch (error) {
+        status.textContent = error.message || 'Erro de comunicacao com o servidor.';
+      } finally {
+        button.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
