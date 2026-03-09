@@ -26,6 +26,8 @@ O projeto agora cobre as etapas 1 a 10 pedidas:
 
 ```text
 apps/receipt-whatsapp-bot/
+  public/
+    index.html
   src/
     config/
       env.js
@@ -49,6 +51,7 @@ apps/receipt-whatsapp-bot/
       regex.js
       textNormalization.js
     index.js
+    server.js
   test-images/
   outputs/
   package.json
@@ -59,14 +62,17 @@ apps/receipt-whatsapp-bot/
 ## Dependencias escolhidas
 
 - `dotenv`: configuracao simples por ambiente.
+- `express`: servidor HTTP para debug e laboratorio visual local.
 - `jimp`: preprocessamento de imagem em JavaScript puro, sem exigir binarios nativos.
+- `multer`: upload em memoria para imagens enviadas na interface local.
+- `sharp`: geracao rapida das versoes visuais de preprocessamento para comparacao lado a lado.
 - `exif-parser`: leitura leve de EXIF para tentar corrigir orientacao.
 - `tesseract.js`: OCR em Node.js, usado como motor base da leitura estruturada por orientacao, OCR global de apoio e OCR por regioes.
 
 Observacao:
 
 - O projeto usa `langPath` apontando para a raiz do app, entao `eng.traineddata` e `por.traineddata` podem ser reaproveitados localmente.
-- Para uma fase futura de producao, ainda faz sentido avaliar `sharp` para preprocessamento de maior desempenho.
+- O OCR principal continua usando o pipeline atual em `Jimp`; `sharp` entrou para o laboratorio visual de preprocessamento.
 
 ## Regras de negocio cobertas
 
@@ -189,6 +195,23 @@ Ela permite:
 - acompanhar o progresso por etapa
 - visualizar imagens intermediarias, regioes destacadas e resultado final
 
+### 7. Rodar laboratorio visual de preprocessamento
+
+```bash
+npm run dev
+```
+
+O laboratorio sobe por padrao em:
+
+- `http://localhost:3000`
+
+Ele permite:
+
+- enviar uma imagem manualmente via upload
+- visualizar lado a lado a imagem original redimensionada
+- comparar as versoes em escala de cinza, contraste normalizado e binarizacao com nitidez
+- validar rapidamente se o preprocessamento esta ajudando ou piorando a legibilidade antes do OCR completo
+
 ## O que o runner local faz
 
 Para cada imagem em `test-images/`, o runner:
@@ -257,6 +280,25 @@ Na tela voce consegue inspecionar:
 - status dos campos obrigatorios
 - diagnostico por checkpoint de falha
 - NF extraida, confianca e classificacao final
+
+## Laboratorio visual de preprocessamento
+
+O endpoint local `POST /api/process` recebe um arquivo no campo `receipt` e devolve 4 buffers em base64:
+
+- `original`
+- `grayscale`
+- `contrast`
+- `binary`
+
+Essa rota usa `processImageForOcr` em [imagePreprocess.service.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/services/imagePreprocess.service.js), que:
+
+1. corrige rotacao via EXIF
+2. redimensiona a imagem para largura alvo de `1800px`
+3. gera a versao em escala de cinza
+4. gera a versao com contraste normalizado
+5. gera a versao binaria com `threshold(128)` e `sharpen()`
+
+O objetivo dessa tela nao e classificar o canhoto, e sim dar comparacao visual rapida do preprocessamento antes de entrar no OCR principal.
 
 ## Exemplo de saida por imagem
 
