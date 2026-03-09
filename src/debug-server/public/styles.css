@@ -1,0 +1,374 @@
+:root {
+  --bg: #f3efe7;
+  --panel: rgba(255, 252, 247, 0.9);
+  --panel-strong: #fffdfa;
+  --line: rgba(71, 55, 36, 0.14);
+  --ink: #1c1917;
+  --muted: #6b5f50;
+  --accent: #2b6f6a;
+  --accent-soft: rgba(43, 111, 106, 0.12);
+  --warning: #c26b1d;
+  --success: #1f8a54;
+  --danger: #b33b45;
+  --shadow: 0 18px 40px rgba(39, 32, 24, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, rgba(43, 111, 106, 0.14), transparent 26%),
+    radial-gradient(circle at top right, rgba(222, 188, 130, 0.2), transparent 28%),
+    var(--bg);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+
+.sidebar {
+  padding: 28px 22px;
+  border-right: 1px solid var(--line);
+  background: rgba(255, 250, 243, 0.82);
+  backdrop-filter: blur(14px);
+}
+
+.sidebar-block + .sidebar-block {
+  margin-top: 26px;
+}
+
+.content {
+  padding: 28px;
+  display: grid;
+  gap: 20px;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+
+.hidden {
+  display: none;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-family: "IBM Plex Serif", Georgia, serif;
+  font-size: 2rem;
+  line-height: 1.05;
+}
+
+h2 {
+  font-size: 1.12rem;
+}
+
+h3 {
+  font-size: 0.98rem;
+}
+
+.muted {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+}
+
+.file-input {
+  display: grid;
+  gap: 8px;
+}
+
+.file-input span {
+  font-weight: 600;
+}
+
+.file-input input {
+  border: 1px dashed var(--line);
+  background: var(--panel-strong);
+  border-radius: 14px;
+  padding: 12px;
+}
+
+.primary-button,
+.ghost-button,
+.test-image-button {
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+}
+
+.primary-button {
+  background: var(--accent);
+  color: white;
+  padding: 12px 16px;
+  font-weight: 700;
+}
+
+.ghost-button {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid rgba(43, 111, 106, 0.18);
+  padding: 8px 12px;
+}
+
+.image-list {
+  display: grid;
+  gap: 10px;
+  max-height: 340px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.test-image-button {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--panel-strong);
+  border: 1px solid transparent;
+}
+
+.test-image-button.active {
+  border-color: rgba(43, 111, 106, 0.4);
+  background: var(--accent-soft);
+}
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.status-card,
+.summary-card,
+.field-card,
+.reason-card,
+.region-preview-card,
+.log-item,
+.progress-card {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel-strong);
+}
+
+.status-card {
+  padding: 16px;
+}
+
+.status-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.chip.valid {
+  background: rgba(31, 138, 84, 0.12);
+  color: var(--success);
+}
+
+.chip.review {
+  background: rgba(194, 107, 29, 0.12);
+  color: var(--warning);
+}
+
+.chip.invalid {
+  background: rgba(179, 59, 69, 0.12);
+  color: var(--danger);
+}
+
+.chip.neutral {
+  background: rgba(28, 25, 23, 0.08);
+  color: var(--ink);
+}
+
+.progress-grid,
+.summary-grid,
+.field-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.progress-card,
+.summary-card,
+.field-card,
+.reason-card,
+.region-preview-card {
+  padding: 16px;
+}
+
+.progress-card .label,
+.summary-card .label,
+.field-card .label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-bottom: 6px;
+}
+
+.progress-card strong,
+.summary-card strong,
+.field-card strong {
+  display: block;
+  font-size: 1rem;
+}
+
+.progress-card.running {
+  border-color: rgba(43, 111, 106, 0.28);
+}
+
+.progress-card.completed {
+  border-color: rgba(31, 138, 84, 0.25);
+}
+
+.progress-card.failed {
+  border-color: rgba(179, 59, 69, 0.24);
+}
+
+.log-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.log-item {
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.log-item .log-time {
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.visual-grid,
+.region-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.visual-card,
+.region-card {
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: var(--panel-strong);
+  overflow: hidden;
+}
+
+.visual-card img,
+.region-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #f1ece3;
+}
+
+.visual-card .body,
+.region-card .body {
+  padding: 14px 16px 18px;
+  display: grid;
+  gap: 8px;
+}
+
+.text-panels {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.text-panel {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px;
+  background: var(--panel-strong);
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", "Cascadia Code", monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #2c241a;
+}
+
+.region-preview-list {
+  margin-top: 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.reason-list {
+  margin-top: 14px;
+  display: grid;
+  gap: 10px;
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .content {
+    padding: 18px;
+  }
+}

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Debug OCR de Canhotos</title>
+    <link rel="stylesheet" href="/debug-ui/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-block">
+          <p class="eyebrow">Local Debug</p>
+          <h1>OCR de Canhotos</h1>
+          <p class="muted">
+            Faça upload ou selecione uma imagem de teste para acompanhar o pipeline visual passo a passo.
+          </p>
+        </div>
+
+        <div class="sidebar-block">
+          <h2>Upload manual</h2>
+          <form id="upload-form" class="stack">
+            <label class="file-input">
+              <span>Selecionar imagem</span>
+              <input id="upload-input" type="file" name="file" accept="image/*" />
+            </label>
+            <button class="primary-button" type="submit">Analisar upload</button>
+          </form>
+        </div>
+
+        <div class="sidebar-block">
+          <div class="section-header">
+            <h2>Imagens da pasta de testes</h2>
+            <button id="refresh-images" class="ghost-button" type="button">Atualizar</button>
+          </div>
+          <div id="test-image-list" class="image-list"></div>
+        </div>
+
+        <div class="sidebar-block">
+          <h2>Status</h2>
+          <div id="job-status" class="status-card">
+            <p class="status-title">Aguardando analise</p>
+            <p class="muted">Nenhum job em execucao.</p>
+          </div>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="panel">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Pipeline</p>
+              <h2>Acompanhamento ao vivo</h2>
+            </div>
+            <div id="summary-chips" class="chips"></div>
+          </div>
+          <div id="progress-grid" class="progress-grid"></div>
+          <div id="log-list" class="log-list"></div>
+        </section>
+
+        <section id="summary-panel" class="panel hidden">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Resultado</p>
+              <h2>Resumo da imagem</h2>
+            </div>
+          </div>
+          <div id="summary-grid" class="summary-grid"></div>
+          <div id="field-grid" class="field-grid"></div>
+          <div id="reason-list" class="reason-list"></div>
+        </section>
+
+        <section id="visual-panel" class="panel hidden">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Etapas Visuais</p>
+              <h2>Transformacoes da imagem</h2>
+            </div>
+          </div>
+          <div id="visual-steps" class="visual-grid"></div>
+        </section>
+
+        <section id="regions-panel" class="panel hidden">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Regioes</p>
+              <h2>Regioes principais analisadas</h2>
+            </div>
+          </div>
+          <div id="region-highlights" class="region-grid"></div>
+        </section>
+
+        <section id="ocr-panel" class="panel hidden">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">OCR</p>
+              <h2>Textos extraidos</h2>
+            </div>
+          </div>
+          <div class="text-panels">
+            <article class="text-panel">
+              <h3>Texto bruto</h3>
+              <pre id="ocr-raw"></pre>
+            </article>
+            <article class="text-panel">
+              <h3>Texto normalizado</h3>
+              <pre id="ocr-normalized"></pre>
+            </article>
+          </div>
+          <div id="region-previews" class="region-preview-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/debug-ui/app.js" defer></script>
+  </body>
+</html>
