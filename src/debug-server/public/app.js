@@ -1,13 +1,20 @@
+const sleep = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 const state = {
   selectedImageId: null,
   currentJobId: null,
   pollTimer: null,
   lastSession: null,
+  filaDeProcessamento: [],
+  processandoFila: false,
+  renderToken: 0,
+  testImages: [],
 };
 
 const elements = {
   imageList: document.getElementById('test-image-list'),
   refreshImages: document.getElementById('refresh-images'),
+  processAll: document.getElementById('process-all'),
   uploadForm: document.getElementById('upload-form'),
   uploadInput: document.getElementById('upload-input'),
   jobStatus: document.getElementById('job-status'),
@@ -54,9 +61,39 @@ const setStatusCard = (title, description) => {
   `;
 };
 
+const syncQueueControls = () => {
+  if (!elements.processAll) return;
+
+  elements.processAll.disabled = state.processandoFila;
+  elements.processAll.textContent = state.processandoFila
+    ? `Processando Fila (${state.filaDeProcessamento.length} restantes)`
+    : 'Processar Fila (Ao Vivo)';
+};
+
+const stopQueueProcessing = () => {
+  state.filaDeProcessamento = [];
+  state.processandoFila = false;
+  syncQueueControls();
+};
+
+const cancelCurrentRender = () => {
+  state.renderToken += 1;
+};
+
+const setActiveTestImageButton = (imageId) => {
+  document.querySelectorAll('.test-image-button').forEach((button) => {
+    const isActive = button.getAttribute('data-image-id') === imageId;
+    button.classList.toggle('active', isActive);
+    if (isActive) {
+      button.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  });
+};
+
 const renderTestImages = (items) => {
   if (!items.length) {
     elements.imageList.innerHTML = '<p class="muted">Nenhuma imagem encontrada em <code>test-images/</code>.</p>';
+    syncQueueControls();
     return;
   }
 
@@ -70,6 +107,7 @@ const renderTestImages = (items) => {
       <span class="muted">${escapeHtml(item.relativePath)}</span>
     </button>
   `).join('');
+  syncQueueControls();
 };
 
 const renderProgress = (stages = {}) => {
@@ -102,7 +140,9 @@ const renderLogs = (logs = []) => {
   `).join('');
 };
 
-const renderSummary = (session) => {
+const renderSummary = async (session) => {
+  const renderToken = state.renderToken + 1;
+  state.renderToken = renderToken;
   elements.summaryPanel.classList.remove('hidden');
   elements.visualPanel.classList.remove('hidden');
   elements.regionsPanel.classList.remove('hidden');
@@ -111,6 +151,7 @@ const renderSummary = (session) => {
   const classification = session.classification || {};
   const summary = session.summary || {};
   const requiredFields = session.requiredFields || {};
+  const texts = session.texts || {};
 
   elements.summaryChips.innerHTML = `
     <span class="chip ${escapeHtml(summary.classification || 'neutral')}">${escapeHtml(summary.classification || 'sem classificacao')}</span>
@@ -174,36 +215,60 @@ const renderSummary = (session) => {
     </article>
   `).join('');
 
-  elements.visualSteps.innerHTML = (session.visualSteps || []).map((step) => `
-    <article class="visual-card">
-      <img src="${escapeHtml(step.url)}" alt="${escapeHtml(step.label)}" />
-      <div class="body">
-        <h3>${escapeHtml(step.label)}</h3>
-        <p class="muted">${escapeHtml(step.description || '')}</p>
-      </div>
-    </article>
-  `).join('');
+  elements.visualSteps.innerHTML = '';
+  elements.regionHighlights.innerHTML = '';
+  elements.ocrRaw.textContent = '';
+  elements.ocrNormalized.textContent = '';
+  elements.regionPreviews.innerHTML = '';
 
-  elements.regionHighlights.innerHTML = (session.regionHighlights || []).map((highlight) => `
-    <article class="region-card">
-      <img src="${escapeHtml(highlight.url)}" alt="${escapeHtml(highlight.sourceVariantLabel)}" />
-      <div class="body">
-        <h3>${escapeHtml(highlight.sourceVariantLabel)}</h3>
-        <p class="muted">${escapeHtml(highlight.boxes.length)} regioes destacadas.</p>
-        ${(highlight.boxes || []).map((box) => `
-          <article class="region-preview-card">
-            <strong>${escapeHtml(box.label)}</strong>
-            <p class="muted">Confianca: ${escapeHtml(box.confidence ?? '-')} | Score: ${escapeHtml(box.score ?? '-')} | PSM: ${escapeHtml(box.psm ?? '-')}</p>
-            <p class="muted">${escapeHtml(box.textPreview || '')}</p>
-          </article>
-        `).join('')}
-      </div>
-    </article>
-  `).join('');
+  for (const step of session.visualSteps || []) {
+    if (renderToken !== state.renderToken) return;
 
-  elements.ocrRaw.textContent = session.texts.fullOcrRaw || '';
-  elements.ocrNormalized.textContent = session.texts.fullOcrNormalized || '';
-  elements.regionPreviews.innerHTML = (session.texts.regionPreviews || []).concat(session.texts.nfRoiPreviews || []).map((item) => `
+    elements.visualSteps.innerHTML += `
+      <article class="visual-card">
+        <img src="${escapeHtml(step.url)}" alt="${escapeHtml(step.label)}" />
+        <div class="body">
+          <h3>${escapeHtml(step.label)}</h3>
+          <p class="muted">${escapeHtml(step.description || '')}</p>
+        </div>
+      </article>
+    `;
+    if (elements.visualSteps.lastElementChild) {
+      elements.visualSteps.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    await sleep(1000);
+  }
+
+  for (const highlight of session.regionHighlights || []) {
+    if (renderToken !== state.renderToken) return;
+
+    elements.regionHighlights.innerHTML += `
+      <article class="region-card">
+        <img src="${escapeHtml(highlight.url)}" alt="${escapeHtml(highlight.sourceVariantLabel)}" />
+        <div class="body">
+          <h3>${escapeHtml(highlight.sourceVariantLabel)}</h3>
+          <p class="muted">${escapeHtml((highlight.boxes || []).length)} regioes destacadas.</p>
+          ${(highlight.boxes || []).map((box) => `
+            <article class="region-preview-card">
+              <strong>${escapeHtml(box.label)}</strong>
+              <p class="muted">Confianca: ${escapeHtml(box.confidence ?? '-')} | Score: ${escapeHtml(box.score ?? '-')} | PSM: ${escapeHtml(box.psm ?? '-')}</p>
+              <p class="muted">${escapeHtml(box.textPreview || '')}</p>
+            </article>
+          `).join('')}
+        </div>
+      </article>
+    `;
+    if (elements.regionHighlights.lastElementChild) {
+      elements.regionHighlights.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    await sleep(1200);
+  }
+
+  if (renderToken !== state.renderToken) return;
+
+  elements.ocrRaw.textContent = texts.fullOcrRaw || '';
+  elements.ocrNormalized.textContent = texts.fullOcrNormalized || '';
+  elements.regionPreviews.innerHTML = (texts.regionPreviews || []).concat(texts.nfRoiPreviews || []).map((item) => `
     <article class="region-preview-card">
       <strong>${escapeHtml(item.label)}</strong>
       <p class="muted">Confianca: ${escapeHtml(item.confidence ?? '-')} | Score: ${escapeHtml(item.score ?? '-')} | PSM: ${escapeHtml(item.meta && item.meta.psm ? item.meta.psm : '-')}</p>
@@ -235,17 +300,26 @@ const pollJob = async (jobId) => {
 
     if (job.status === 'completed' && job.result) {
       state.lastSession = job.result;
-      renderSummary(job.result);
+      await renderSummary(job.result);
+
+      if (state.processandoFila && state.filaDeProcessamento.length > 0) {
+        await sleep(2500);
+        processarProximoDaFila();
+      } else {
+        stopQueueProcessing();
+      }
       return;
     }
 
     if (job.status === 'failed') {
+      stopQueueProcessing();
       setStatusCard('Falha no job', job.error ? job.error.message : 'Erro desconhecido.');
       return;
     }
 
     state.pollTimer = window.setTimeout(() => pollJob(jobId), 1000);
   } catch (error) {
+    stopQueueProcessing();
     setStatusCard('Erro ao atualizar job', error.message);
   }
 };
@@ -255,6 +329,8 @@ const createTestImageJob = async () => {
     setStatusCard('Selecione uma imagem', 'Escolha uma imagem da pasta de testes antes de iniciar a analise.');
     return;
   }
+
+  cancelCurrentRender();
 
   const response = await fetch('/api/debug/jobs/test-image', {
     method: 'POST',
@@ -279,6 +355,7 @@ const createTestImageJob = async () => {
 };
 
 const createUploadJob = async (file) => {
+  cancelCurrentRender();
   const formData = new FormData();
   formData.append('file', file);
 
@@ -307,6 +384,8 @@ const loadTestImages = async () => {
     throw new Error(payload.error || 'Falha ao carregar imagens de teste.');
   }
 
+  state.testImages = payload.items || [];
+
   if (!state.selectedImageId && payload.items.length) {
     state.selectedImageId = payload.items[0].id;
   }
@@ -314,10 +393,31 @@ const loadTestImages = async () => {
   renderTestImages(payload.items);
 };
 
+const processarProximoDaFila = async () => {
+  if (!state.filaDeProcessamento.length) {
+    setStatusCard('Fila concluida', 'Todos os canhotos foram processados.');
+    stopQueueProcessing();
+    return;
+  }
+
+  const nextImageId = state.filaDeProcessamento.shift();
+  state.selectedImageId = nextImageId;
+  syncQueueControls();
+  setActiveTestImageButton(nextImageId);
+
+  try {
+    await createTestImageJob();
+  } catch (error) {
+    stopQueueProcessing();
+    setStatusCard('Erro', error.message);
+  }
+};
+
 elements.imageList.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-image-id]');
   if (!button) return;
 
+  stopQueueProcessing();
   state.selectedImageId = button.getAttribute('data-image-id');
   await loadTestImages();
   createTestImageJob().catch((error) => setStatusCard('Erro', error.message));
@@ -329,6 +429,7 @@ elements.refreshImages.addEventListener('click', () => {
 
 elements.uploadForm.addEventListener('submit', (event) => {
   event.preventDefault();
+  stopQueueProcessing();
   const file = elements.uploadInput.files && elements.uploadInput.files[0];
   if (!file) {
     setStatusCard('Selecione um arquivo', 'Escolha uma imagem antes de enviar.');
@@ -338,7 +439,22 @@ elements.uploadForm.addEventListener('submit', (event) => {
   createUploadJob(file).catch((error) => setStatusCard('Erro', error.message));
 });
 
+elements.processAll.addEventListener('click', () => {
+  state.filaDeProcessamento = (state.testImages || []).map((item) => item.id);
+
+  if (!state.filaDeProcessamento.length) {
+    setStatusCard('Aviso', 'Nenhuma imagem na pasta para processar.');
+    stopQueueProcessing();
+    return;
+  }
+
+  state.processandoFila = true;
+  syncQueueControls();
+  processarProximoDaFila();
+});
+
 renderProgress({});
 renderLogs([]);
 setStatusCard('Aguardando analise', 'Selecione uma imagem ou envie um novo canhoto.');
+syncQueueControls();
 loadTestImages().catch((error) => setStatusCard('Erro', error.message));

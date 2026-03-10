@@ -24,6 +24,49 @@ const buildImageResult = (imagePath, payload = {}) => ({
   ...payload,
 });
 const formatSeconds = (milliseconds) => `${(Number(milliseconds || 0) / 1000).toFixed(1)}s`;
+const extractExpectedNfFromFileName = (fileName) => {
+  const match = String(fileName || '').match(/^(\d{7})(?:\.[a-z0-9]+)?$/i);
+  return match ? match[1] : null;
+};
+const hasCompetingStrongCandidate = (analysis) => {
+  const candidates = Array.isArray(analysis && analysis.nfExtraction && analysis.nfExtraction.candidates)
+    ? analysis.nfExtraction.candidates
+    : [];
+  const currentNf = analysis && analysis.nfExtraction ? analysis.nfExtraction.nf : null;
+  const currentConfidence = Number(analysis && analysis.nfExtraction ? analysis.nfExtraction.confidence || 0 : 0);
+
+  if (!currentNf || candidates.length < 2) return false;
+
+  return candidates.some((candidate) => (
+    candidate.nf
+    && candidate.nf !== currentNf
+    && Number(candidate.confidence || 0) >= currentConfidence - 0.05
+  ));
+};
+const shouldRetryWithBatch = (analysis, fastModeEnabled) => (
+  !!fastModeEnabled
+  && !!analysis
+  && !(analysis.validation && analysis.validation.metrics && analysis.validation.metrics.geometryHardReject)
+  && (
+    !(analysis.nfExtraction && analysis.nfExtraction.nf)
+    || !(analysis.invoiceLookup && analysis.invoiceLookup.found)
+    || hasCompetingStrongCandidate(analysis)
+  )
+);
+
+const choosePreferredAnalysis = (primaryAnalysis, fallbackAnalysis) => {
+  if (!fallbackAnalysis) return primaryAnalysis;
+  if (fallbackAnalysis.nfExtraction && fallbackAnalysis.nfExtraction.nf) return fallbackAnalysis;
+
+  const primaryScore = Number(primaryAnalysis && primaryAnalysis.classification && primaryAnalysis.classification.metrics
+    ? primaryAnalysis.classification.metrics.businessScore
+    : 0);
+  const fallbackScore = Number(fallbackAnalysis && fallbackAnalysis.classification && fallbackAnalysis.classification.metrics
+    ? fallbackAnalysis.classification.metrics.businessScore
+    : 0);
+
+  return fallbackScore > primaryScore ? fallbackAnalysis : primaryAnalysis;
+};
 
 async function main() {
   assertSupportedNode('npm run test:local');
@@ -59,18 +102,37 @@ async function main() {
     const outputPath = path.join(resultsDir, outputFileName);
 
     try {
-      const analysis = await receiptAnalysisService.analyzeImage({
+      const primaryAnalysis = await receiptAnalysisService.analyzeImage({
         imagePath,
         outputDir: perImageOutputDir,
         profile: env.receiptLocalFastMode ? 'local_fast' : 'batch',
       });
+      let analysis = primaryAnalysis;
+      let analysisMode = env.receiptLocalFastMode ? 'local_fast' : 'batch';
+
+      if (shouldRetryWithBatch(primaryAnalysis, env.receiptLocalFastMode)) {
+        const fallbackAnalysis = await receiptAnalysisService.analyzeImage({
+          imagePath,
+          outputDir: path.join(perImageOutputDir, 'batch-fallback'),
+          profile: 'batch',
+        });
+        analysis = choosePreferredAnalysis(primaryAnalysis, fallbackAnalysis);
+        if (analysis === fallbackAnalysis) {
+          analysisMode = 'batch_fallback';
+        }
+      }
+
       const apiPreview = await apiService.syncAnalysisResult(analysis);
       const bestVariant = analysis.preprocess.variants.find(
         (variant) => variant.id === analysis.ocrProbe.bestVariantId,
       ) || null;
+      const expectedNf = extractExpectedNfFromFileName(path.basename(imagePath));
+      const detectedNf = analysis.nfExtraction.nf || null;
+      const nfMatchesExpected = expectedNf ? detectedNf === expectedNf : !!detectedNf;
 
       const result = buildImageResult(imagePath, {
         classification: analysis.classification,
+        analysisMode,
         validation: analysis.validation,
         preprocess: {
           outputDir: analysis.preprocess.outputDir,
@@ -93,6 +155,8 @@ async function main() {
         invoiceLookup: analysis.invoiceLookup,
         timings: analysis.timings,
         apiPreview,
+        expectedNf,
+        nfMatchesExpected,
       });
 
       await writeJsonFile(outputPath, result);
@@ -101,8 +165,10 @@ async function main() {
         outputPath,
         status: result.status,
         classification: analysis.classification.classification,
+        expectedNf,
         businessScore: analysis.classification.metrics.businessScore,
-        nf: analysis.nfExtraction.nf,
+        nf: detectedNf,
+        nfMatchesExpected,
         nfConfidence: analysis.nfExtraction.confidence,
         nfOrigin: analysis.nfExtraction.origin,
         nfUsedFallback: analysis.nfExtraction.usedFallback,
@@ -119,6 +185,7 @@ async function main() {
           ? analysis.diagnostics.summary.blockingFailedKeys
           : [],
         approvalBasis: analysis.diagnostics ? analysis.diagnostics.approvalBasis : null,
+        analysisMode,
         totalVariants: analysis.preprocess.totalVariants,
         bestOrientationId: analysis.ocrProbe.bestOrientationId,
         bestVariantId: analysis.ocrProbe.bestVariantId,
@@ -182,6 +249,8 @@ async function main() {
     reviewCount: processed.filter((item) => item.classification === 'review').length,
     invalidCount: processed.filter((item) => item.classification === 'invalid').length,
     detectedNfCount: processed.filter((item) => !!item.nf).length,
+    matchedExpectedNfCount: processed.filter((item) => item.nfMatchesExpected !== false && !!item.nf).length,
+    mismatchedExpectedNfCount: processed.filter((item) => item.nfMatchesExpected === false).length,
     nfDetectionRate: processed.length
       ? Number((processed.filter((item) => !!item.nf).length / processed.length).toFixed(4))
       : 0,
@@ -206,14 +275,18 @@ async function main() {
     totalImages: imageFiles.length,
     summaryPath,
   });
-  const successfulReads = processed.filter((item) => item.classification === 'valid' && item.nf);
-  const failedOrReview = processed.filter((item) => item.classification !== 'valid' || !item.nf);
+  const successfulReads = processed.filter((item) => !!item.nf && item.nfMatchesExpected !== false);
+  const mismatchedReads = processed.filter((item) => !!item.nf && item.nfMatchesExpected === false);
+  const failedOrReview = processed.filter((item) => !item.nf);
 
   console.log('');
   console.log('Relatorio final dos canhotos');
   console.log(`Total processado: ${summary.totalImages}`);
   console.log(`Validas: ${summary.validCount} | Revisao: ${summary.reviewCount} | Invalidas: ${summary.invalidCount}`);
   console.log(`NFs lidas com sucesso: ${successfulReads.length}`);
+  if (processed.some((item) => item.expectedNf)) {
+    console.log(`NFs corretas pelo nome do arquivo: ${summary.matchedExpectedNfCount}/${processed.filter((item) => item.expectedNf).length}`);
+  }
   console.log(`Tempo medio por imagem: ${summary.averageProcessingMs ? formatSeconds(summary.averageProcessingMs) : '0.0s'}`);
   if (summary.slowestImage) {
     console.log(`Imagem mais lenta: ${summary.slowestImage.fileName} (${formatSeconds(summary.slowestImage.totalMs)})`);
@@ -228,21 +301,29 @@ async function main() {
       const approvalLabel = item.approvalBasis === 'nf_confirmada_no_banco'
         ? ' | origem confirmada no banco'
         : '';
-      console.log(`- ${item.fileName}: NF ${item.nf} | tempo ${formatSeconds(item.totalMs)}${approvalLabel}`);
+      console.log(`- ${item.fileName}: NF ${item.nf} | classificacao ${item.classification || 'desconhecida'} | tempo ${formatSeconds(item.totalMs)}${approvalLabel}`);
     });
   }
 
-  console.log('');
-  console.log('Falhas ou revisao');
-  if (!failedOrReview.length) {
-    console.log('- nenhuma');
-  } else {
+  if (mismatchedReads.length) {
+    console.log('');
+    console.log('NFs lidas incorretamente');
+    mismatchedReads.forEach((item) => {
+      console.log(
+        `- ${item.fileName}: NF lida ${item.nf} | esperado ${item.expectedNf || '-'} | classificacao ${item.classification || 'desconhecida'} | tempo ${formatSeconds(item.totalMs)}`,
+      );
+    });
+  }
+
+  if (failedOrReview.length) {
+    console.log('');
+    console.log('Falhas sem NF');
     failedOrReview.forEach((item) => {
       const failedParts = Array.isArray(item.failedCheckpoints) && item.failedCheckpoints.length
         ? item.failedCheckpoints.join(', ')
         : 'sem diagnostico objetivo';
       console.log(
-        `- ${item.fileName}: ${item.classification || item.status} | falhou em: ${failedParts} | NF ${item.nf || 'nao detectada'} | tempo ${formatSeconds(item.totalMs)}`,
+        `- ${item.fileName}: ${item.classification || item.status} | falhou em: ${failedParts} | NF nao detectada | tempo ${formatSeconds(item.totalMs)}`,
       );
     });
   }
