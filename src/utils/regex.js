@@ -1,8 +1,18 @@
+const env = require('../config/env');
+
 const NF_LABEL_FRAGMENT = 'N\\s*F(?:[\\s.\\-_/]*[EEC])?';
 const NFE_MARKER_REGEX = new RegExp(`\\b${NF_LABEL_FRAGMENT}\\b|\\bNFE\\b`, 'gi');
 const NUMERO_MARKER_REGEX = /\bN[\s.\-_/]*[O0º°]?\s*[:#-]?\s*/gi;
 const SERIE_1_REGEX = /\bSER[I1][E3]?\s*[:#-]?\s*1\b/gi;
-const DIGIT_GROUP_REGEX = /\b\d{5,10}\b/g;
+const EXPECTED_DIGIT_FRAGMENT = (
+  (Array.isArray(env.ocrExpectedNfLengths) && env.ocrExpectedNfLengths.length
+    ? env.ocrExpectedNfLengths
+    : [7]
+  )
+    .map((size) => `\\d{${size}}`)
+    .join('|')
+);
+const DIGIT_GROUP_REGEX = new RegExp(`\\b(?:${EXPECTED_DIGIT_FRAGMENT})\\b`, 'g');
 
 const REQUIRED_FIELD_TARGETS = {
   dataRecebimento: [
@@ -31,7 +41,7 @@ const REQUIRED_FIELD_TARGETS = {
 const INVOICE_CONTEXT_PATTERNS = [
   {
     id: 'nfe_numero_serie',
-    regex: new RegExp(`${NF_LABEL_FRAGMENT}[\\s\\S]{0,80}?N[\\s.\\-_/]*[O0º°]?\\s*[:#-]?\\s*(\\d{5,10})[\\s\\S]{0,80}?SER[I1][E3]?\\s*[:#-]?\\s*1`, 'gi'),
+    regex: new RegExp(`${NF_LABEL_FRAGMENT}[\\s\\S]{0,80}?N[\\s.\\-_/]*[O0º°]?\\s*[:#-]?\\s*(?<!\\d)((?:${EXPECTED_DIGIT_FRAGMENT}))(?!\\d)[\\s\\S]{0,80}?SER[I1][E3]?\\s*[:#-]?\\s*1`, 'gi'),
     context: {
       foundNfe: true,
       foundNumeroMarker: true,
@@ -40,7 +50,7 @@ const INVOICE_CONTEXT_PATTERNS = [
   },
   {
     id: 'numero_serie',
-    regex: /N[\s.\-_/]*[O0º°]?\s*[:#-]?\s*(\d{5,10})[\s\S]{0,50}?SER[I1][E3]?\s*[:#-]?\s*1/gi,
+    regex: new RegExp(`N[\\s.\\-_/]*[O0º°]?\\s*[:#-]?\\s*(?<!\\d)((?:${EXPECTED_DIGIT_FRAGMENT}))(?!\\d)[\\s\\S]{0,50}?SER[I1][E3]?\\s*[:#-]?\\s*1`, 'gi'),
     context: {
       foundNfe: false,
       foundNumeroMarker: true,
@@ -49,7 +59,7 @@ const INVOICE_CONTEXT_PATTERNS = [
   },
   {
     id: 'nfe_numero',
-    regex: new RegExp(`${NF_LABEL_FRAGMENT}[\\s\\S]{0,50}?N[\\s.\\-_/]*[O0º°]?\\s*[:#-]?\\s*(\\d{5,10})`, 'gi'),
+    regex: new RegExp(`${NF_LABEL_FRAGMENT}[\\s\\S]{0,50}?N[\\s.\\-_/]*[O0º°]?\\s*[:#-]?\\s*(?<!\\d)((?:${EXPECTED_DIGIT_FRAGMENT}))(?!\\d)`, 'gi'),
     context: {
       foundNfe: true,
       foundNumeroMarker: true,

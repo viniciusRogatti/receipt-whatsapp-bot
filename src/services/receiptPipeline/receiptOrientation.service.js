@@ -61,17 +61,35 @@ const buildOrientationEvaluation = async ({ preprocess, orientationId, documents
     documents,
   });
   const orientationCandidate = findOrientationCandidate(preprocess, orientationId);
+  const alignment = orientationCandidate ? orientationCandidate.alignment : null;
+  const alignmentQuality = Number(alignment && alignment.warpCandidateQuality || 0);
+  const signatureCheck = alignment && alignment.signatureCheck ? alignment.signatureCheck : null;
+  const suspiciousSignature = !!(
+    signatureCheck
+    && signatureCheck.darkRatio >= 0.78
+    && signatureCheck.rowCoverage >= 0.88
+    && signatureCheck.columnCoverage >= 0.9
+  );
   const templateScore = receiptTemplateService.scoreTemplateMatch({
-    contour: orientationCandidate && orientationCandidate.alignment
+    contour: alignment
       ? {
-        geometryScore: orientationCandidate.alignment.geometryScore,
+        geometryScore: alignment.geometryScore,
       }
       : {},
     requiredFields: detection.requiredFields,
     nfBlockDetected: !!(detection.requiredFields.nfe && detection.requiredFields.nfe.found),
   });
   const tieBreaker = Number(nfExtraction.confidence || 0) * 6;
-  const totalScore = Number((templateScore.score + tieBreaker).toFixed(2));
+  const alignmentBonus = Number((alignmentQuality * 16).toFixed(2));
+  const suspiciousAlignmentPenalty = alignment && alignment.suspiciousWarp ? 8 : 0;
+  const signaturePenalty = suspiciousSignature ? 6 : 0;
+  const totalScore = Number((
+    templateScore.score
+    + tieBreaker
+    + alignmentBonus
+    - suspiciousAlignmentPenalty
+    - signaturePenalty
+  ).toFixed(2));
   const primaryVariant = (preprocess.variants || []).find((variant) => (
     variant.orientationId === orientationId && variant.profileId === 'document_gray'
   ));
@@ -89,7 +107,9 @@ const buildOrientationEvaluation = async ({ preprocess, orientationId, documents
       method: nfExtraction.method,
     },
     templateBreakdown: templateScore.breakdown,
-    alignment: orientationCandidate ? orientationCandidate.alignment : null,
+    alignment: alignment,
+    alignmentBonus,
+    suspiciousSignature,
     documents: summarizeDocuments(documents),
   };
 };
@@ -164,7 +184,7 @@ module.exports = {
       ocrResults: mergedResults,
     });
 
-    if (!fastMode && shouldRunSecondaryProbe(evaluations, { fastMode })) {
+    if (shouldRunSecondaryProbe(evaluations, { fastMode })) {
       const topOrientationIds = evaluations.slice(0, 2).map((item) => item.orientationId);
       const secondaryTargets = await buildProbeTargets({
         preprocess,

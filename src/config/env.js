@@ -9,7 +9,7 @@ const resolvePath = (targetPath, fallback) => {
   return path.resolve(projectRoot, raw);
 };
 
-const parseExpectedLengths = (rawValue, fallback = [7, 8]) => {
+const parseExpectedLengths = (rawValue, fallback = [7]) => {
   const parsed = String(rawValue || '')
     .split(',')
     .map((item) => Number(String(item || '').trim()))
@@ -47,7 +47,7 @@ const env = {
   ocrFullMaxEdge: Number(process.env.OCR_FULL_MAX_EDGE || 1100),
   ocrRegionMaxEdge: Number(process.env.OCR_REGION_MAX_EDGE || 900),
   ocrRegionMinEdge: Number(process.env.OCR_REGION_MIN_EDGE || 1200),
-  ocrExpectedNfLengths: parseExpectedLengths(process.env.OCR_NF_EXPECTED_LENGTHS, [7, 8]),
+  ocrExpectedNfLengths: parseExpectedLengths(process.env.OCR_NF_EXPECTED_LENGTHS, [7]),
   ocrSuppressConsoleNoise: parseBoolean(process.env.OCR_SUPPRESS_CONSOLE_NOISE, true),
   receiptInvoiceLookupMode: String(process.env.RECEIPT_INVOICE_LOOKUP_MODE || 'auto').trim().toLowerCase(),
   receiptInvoiceLookupCompanyCode: String(process.env.RECEIPT_INVOICE_LOOKUP_COMPANY_CODE || 'mar_e_rio').trim(),

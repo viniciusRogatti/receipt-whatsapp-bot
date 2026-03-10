@@ -24,6 +24,31 @@ const CLAHE_TILE_SIZE = 64;
 const CLAHE_CLIP_LIMIT = 2.2;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
+const removeColoredInk = (image, {
+  redDelta = 28,
+  blueDelta = 18,
+  minChroma = 24,
+} = {}) => {
+  image.scan(0, 0, image.bitmap.width, image.bitmap.height, function scanPixel(x, y, idx) {
+    const red = this.bitmap.data[idx + 0];
+    const green = this.bitmap.data[idx + 1];
+    const blue = this.bitmap.data[idx + 2];
+    const maxChannel = Math.max(red, green, blue);
+    const minChannel = Math.min(red, green, blue);
+    const chroma = maxChannel - minChannel;
+    const looksRed = red > green + redDelta && red > blue + redDelta;
+    const looksBlue = blue > red + blueDelta && blue > green + blueDelta;
+
+    if ((looksRed || looksBlue) && chroma >= minChroma) {
+      this.bitmap.data[idx + 0] = 255;
+      this.bitmap.data[idx + 1] = 255;
+      this.bitmap.data[idx + 2] = 255;
+    }
+  });
+
+  return image;
+};
+
 const ORIENTATION_TO_ROTATION = {
   3: 180,
   6: 90,
@@ -61,6 +86,15 @@ const VARIANT_PROFILES = [
     ocrProbeCandidate: false,
     operations: ['document_focus', 'greyscale', 'normalize', 'adaptive_contrast', 'contrast_0.24', 'sharpen_kernel'],
     apply: (image) => adaptiveContrastNormalize(image.greyscale().normalize()).contrast(0.24).convolute(SHARPEN_KERNEL),
+  },
+  {
+    id: 'document_ink_clean',
+    label: 'Documento com tinta colorida limpa',
+    ocrProbeCandidate: false,
+    operations: ['document_focus', 'remove_colored_ink', 'greyscale', 'normalize', 'adaptive_contrast', 'contrast_0.28'],
+    apply: (image) => adaptiveContrastNormalize(
+      removeColoredInk(image).greyscale().normalize(),
+    ).contrast(0.28),
   },
 ];
 
@@ -751,6 +785,8 @@ const buildVariantAlignment = (orientedAlignment, variantImage) => {
     templateMatched: orientedAlignment.templateMatched,
     deskewAngle: orientedAlignment.deskew.angle,
     warpApplied: orientedAlignment.warp.applied,
+    warpCandidateKind: orientedAlignment.warp.candidateKind || null,
+    warpCandidateQuality: Number(orientedAlignment.warp.candidateQuality || 0),
     nfAnchor: nfAnchor
       ? {
         detected: !!nfAnchor.detected,
@@ -764,6 +800,7 @@ const buildVariantAlignment = (orientedAlignment, variantImage) => {
         roiBox: scalePixelBox(orientedAlignment.signatureCheck.roiBox, scaleX, scaleY, targetWidth, targetHeight),
       })
       : null,
+    suspiciousWarp: !!(orientedAlignment.warp && orientedAlignment.warp.suspiciousWarp),
     normalizedWidth: targetWidth,
     normalizedHeight: targetHeight,
   };
@@ -820,6 +857,7 @@ module.exports = {
   adaptiveContrastNormalize,
   morphologyClose,
   sharpenLight,
+  removeColoredInk,
   normalizeLongestEdge,
   findDocumentBounds,
   findReceiptBandBounds,
@@ -896,14 +934,17 @@ module.exports = {
             contourBounds: variantAlignment.contourBounds,
             contourCorners: variantAlignment.contourCorners,
             contourScore: variantAlignment.contourScore,
-            templateMatched: variantAlignment.templateMatched,
-            deskewAngle: variantAlignment.deskewAngle,
-            warpApplied: variantAlignment.warpApplied,
-            nfAnchor: variantAlignment.nfAnchor,
-            signatureCheck: variantAlignment.signatureCheck,
-            normalizedWidth: variantAlignment.normalizedWidth,
-            normalizedHeight: variantAlignment.normalizedHeight,
-          },
+          templateMatched: variantAlignment.templateMatched,
+          deskewAngle: variantAlignment.deskewAngle,
+          warpApplied: variantAlignment.warpApplied,
+          warpCandidateKind: variantAlignment.warpCandidateKind,
+          warpCandidateQuality: variantAlignment.warpCandidateQuality,
+          nfAnchor: variantAlignment.nfAnchor,
+          signatureCheck: variantAlignment.signatureCheck,
+          suspiciousWarp: variantAlignment.suspiciousWarp,
+          normalizedWidth: variantAlignment.normalizedWidth,
+          normalizedHeight: variantAlignment.normalizedHeight,
+        },
           alignedFilePath,
           maskedFilePath,
         });
@@ -928,8 +969,11 @@ module.exports = {
           deskewAngle: orientedBase.alignment.deskew.angle,
           deskewScore: orientedBase.alignment.deskew.score,
           warpApplied: orientedBase.alignment.warp.applied,
+          warpCandidateKind: orientedBase.alignment.warp.candidateKind || null,
+          warpCandidateQuality: Number(orientedBase.alignment.warp.candidateQuality || 0),
           nfAnchor: orientedBase.alignment.nfAnchor,
           signatureCheck: orientedBase.alignment.signatureCheck,
+          suspiciousWarp: !!(orientedBase.alignment.warp && orientedBase.alignment.warp.suspiciousWarp),
           normalizedWidth: orientedBase.alignment.normalized.width,
           normalizedHeight: orientedBase.alignment.normalized.height,
           geometryScore: orientedBase.alignment.geometryScore,

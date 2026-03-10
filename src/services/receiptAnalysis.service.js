@@ -1,12 +1,377 @@
+const fs = require('fs');
+const path = require('path');
+const Jimp = require('jimp');
 const imagePreprocessService = require('./imagePreprocess.service');
 const receiptDetectorService = require('./receiptDetector.service');
 const nfExtractorService = require('./nfExtractor.service');
 const receiptClassifierService = require('./receiptClassifier.service');
 const apiService = require('./api.service');
+const ocrService = require('./ocr.service');
 const receiptOrientationService = require('./receiptPipeline/receiptOrientation.service');
 const receiptStructuredOcrService = require('./receiptPipeline/receiptStructuredOcr.service');
 const receiptValidationService = require('./receiptPipeline/receiptValidation.service');
-const { RECEIPT_TEMPLATE } = require('./receiptPipeline/receiptConstants');
+const receiptTemplateService = require('./receiptPipeline/receiptTemplate.service');
+const {
+  NF_ROI_DEFINITIONS,
+  RECEIPT_TEMPLATE,
+} = require('./receiptPipeline/receiptConstants');
+
+const NF_BLOCK_DEFINITION = NF_ROI_DEFINITIONS.find((definition) => definition.id === 'nf_block') || null;
+const NF_BLOCK_RESCUE_CROPS = [
+  {
+    id: 'nf_block_clean_rescue_full',
+    label: 'Bloco NF-e limpo',
+    cropBox: null,
+  },
+  {
+    id: 'nf_block_clean_rescue_low',
+    label: 'Bloco NF-e limpo recorte inferior',
+    cropBox: { x: 0.0, y: 0.18, width: 1.0, height: 0.82 },
+  },
+];
+
+const buildRescueCrop = (sourceImage, cropBox = null) => {
+  if (!cropBox) return sourceImage.clone();
+
+  const x = Math.max(0, Math.floor(sourceImage.bitmap.width * Number(cropBox.x || 0)));
+  const y = Math.max(0, Math.floor(sourceImage.bitmap.height * Number(cropBox.y || 0)));
+  const width = Math.max(2, Math.floor(sourceImage.bitmap.width * Number(cropBox.width || 1)));
+  const height = Math.max(2, Math.floor(sourceImage.bitmap.height * Number(cropBox.height || 1)));
+
+  return sourceImage.clone().crop(
+    x,
+    y,
+    Math.min(width, sourceImage.bitmap.width - x),
+    Math.min(height, sourceImage.bitmap.height - y),
+  );
+};
+
+const buildNfRescueDocuments = async ({
+  imagePath,
+  preprocess,
+  orientationProbe,
+  outputDir,
+  fastMode = false,
+}) => {
+  if (!NF_BLOCK_DEFINITION) return [];
+
+  const baseImage = await Jimp.read(imagePath);
+  if (preprocess.orientation && preprocess.orientation.rotation) {
+    baseImage.rotate(preprocess.orientation.rotation);
+  }
+  const rankedOrientationIds = Array.isArray(orientationProbe.results) && orientationProbe.results.length
+    ? orientationProbe.results.map((item) => item.orientationId)
+    : (preprocess.orientationCandidates || []).map((item) => item.id);
+  const uniqueOrientationIds = rankedOrientationIds.filter((orientationId, index, array) => (
+    orientationId && array.indexOf(orientationId) === index
+  )).slice(0, fastMode ? 2 : 3);
+  const rescueOutputDir = path.join(outputDir, 'nf-rescue');
+  fs.mkdirSync(rescueOutputDir, { recursive: true });
+  const targets = [];
+
+  for (const orientationId of uniqueOrientationIds) {
+    const orientationCandidate = (preprocess.orientationCandidates || []).find((candidate) => candidate.id === orientationId);
+    if (!orientationCandidate) continue;
+
+    const orientedImage = baseImage.clone();
+    if (orientationCandidate.rotation) {
+      orientedImage.rotate(orientationCandidate.rotation);
+    }
+
+    const alignment = receiptTemplateService.alignReceiptToTemplate(orientedImage);
+    const cleanedAligned = imagePreprocessService
+      .removeColoredInk(alignment.alignedImage.clone())
+      .greyscale()
+      .normalize()
+      .contrast(0.3);
+    const nfBlockBox = receiptTemplateService.buildPixelBox(cleanedAligned, NF_BLOCK_DEFINITION.box);
+    const nfBlockImage = cleanedAligned.clone().crop(
+      nfBlockBox.x,
+      nfBlockBox.y,
+      nfBlockBox.width,
+      nfBlockBox.height,
+    );
+
+    for (const rescueCrop of NF_BLOCK_RESCUE_CROPS) {
+      const crop = buildRescueCrop(nfBlockImage, rescueCrop.cropBox);
+      const preparedCrop = crop.clone().scale(fastMode ? 3 : 4);
+      const preparedTargets = [
+        {
+          suffix: '',
+          image: preparedCrop.clone(),
+          variantProfileId: 'document_ink_clean_rescue',
+          targetRole: rescueCrop.id,
+        },
+        {
+          suffix: '__sharp',
+          image: imagePreprocessService.sharpenLight(preparedCrop.clone().contrast(0.2)),
+          variantProfileId: 'document_ink_clean_rescue_sharp',
+          targetRole: `${rescueCrop.id}_sharp`,
+        },
+      ];
+
+      for (const preparedTarget of preparedTargets) {
+        const filePath = path.join(rescueOutputDir, `${orientationId}__${rescueCrop.id}${preparedTarget.suffix}.png`);
+        await preparedTarget.image.getBufferAsync(Jimp.MIME_PNG).then((buffer) => fs.promises.writeFile(filePath, buffer));
+        targets.push({
+          id: `${orientationId}__${rescueCrop.id}${preparedTarget.suffix}`,
+          label: `${rescueCrop.label} [${orientationId}]${preparedTarget.suffix ? ' [nitido]' : ''}`,
+          filePath,
+          sourceType: 'nf_roi',
+          parameters: {
+            tessedit_pageseg_mode: '6',
+            classify_bln_numeric_mode: '1',
+          },
+          meta: {
+            orientationId,
+            regionId: 'nf_block',
+            regionLabel: rescueCrop.label,
+            fieldKeys: ['nfe'],
+            sourceVariantId: `${orientationId}__ink_clean_rescue`,
+            variantProfileId: preparedTarget.variantProfileId,
+            targetRole: preparedTarget.targetRole,
+            roiProfileId: 'nf_context_gray_2x',
+            requestedRoiId: 'nf_block',
+            roiId: 'nf_block',
+            roiWidth: preparedTarget.image.bitmap.width,
+            roiHeight: preparedTarget.image.bitmap.height,
+            roiBox: NF_BLOCK_DEFINITION.box,
+            layoutStrategy: 'template_fixed_rescue',
+            usedFallback: false,
+            fallbackChain: ['nf_block'],
+            rescueKind: rescueCrop.id,
+            psm: '6',
+          },
+        });
+      }
+    }
+  }
+
+  if (!targets.length) return [];
+
+  const results = [];
+  for (const target of targets) {
+    const recognition = await ocrService.recognizeTargets([target], {
+      language: 'por',
+      maxEdge: fastMode ? 1800 : 2200,
+      minEdge: fastMode ? 1100 : 1400,
+    });
+    if (recognition.results && recognition.results[0]) {
+      results.push(recognition.results[0]);
+    }
+  }
+
+  return results;
+};
+
+const hydrateNfExtractionFromCandidate = (baseExtraction = {}, candidate = null) => {
+  if (!candidate) return baseExtraction;
+
+  const bestEvidence = Array.isArray(candidate.evidence) ? candidate.evidence[0] : null;
+
+  return Object.assign({}, baseExtraction, {
+    nf: candidate.nf,
+    confidence: candidate.confidence,
+    method: candidate.method,
+    matchedPattern: candidate.method,
+    context: candidate.context || {
+      foundNfe: false,
+      foundNumeroMarker: false,
+    },
+    supportCount: candidate.supportCount || 0,
+    roiSupportCount: candidate.roiSupportCount || 0,
+    variantSupportCount: candidate.variantSupportCount || 0,
+    sourceTypes: candidate.sourceTypes || [],
+    sourceRegion: bestEvidence ? bestEvidence.requestedRoiId || bestEvidence.regionId : null,
+    sourceRegionId: bestEvidence ? bestEvidence.regionId : null,
+    rawText: bestEvidence ? bestEvidence.evidence : null,
+    supportingTexts: candidate.supportingTexts || [],
+    supportingRois: candidate.supportingRois || [],
+    supportingVariants: candidate.supportingVariants || [],
+    decisionReason: candidate.decisionReason || [],
+    origin: candidate.origin || null,
+    usedFallback: !!candidate.usedFallback,
+  });
+};
+
+const buildTightFuzzyDbNeighbors = (candidate) => {
+  const digits = String(candidate && candidate.nf || '').trim();
+  const neighbors = new Set();
+
+  digits.split('').forEach((digit, index) => {
+    if (digit === '8') {
+      neighbors.add(digits.slice(0, index) + '5' + digits.slice(index + 1));
+    } else if (digit === '5') {
+      neighbors.add(digits.slice(0, index) + '8' + digits.slice(index + 1));
+    }
+  });
+
+  return Array.from(neighbors);
+};
+
+const hasCompetingStrongCandidate = (nfExtraction = {}) => {
+  const candidates = Array.isArray(nfExtraction.candidates)
+    ? nfExtraction.candidates
+    : [];
+  if (candidates.length < 2 || !nfExtraction.nf) return false;
+
+  const currentConfidence = Number(nfExtraction.confidence || 0);
+
+  return candidates.some((candidate) => (
+    candidate.nf
+    && candidate.nf !== nfExtraction.nf
+    && Number(candidate.confidence || 0) >= currentConfidence - 0.05
+  ));
+};
+
+const resolveFuzzyDbRescue = async (candidates = []) => {
+  const fuzzyRescueCandidates = candidates.filter((candidate) => (
+    Array.isArray(candidate.supportingVariants)
+    && candidate.supportingVariants.some((variantId) => (
+      String(variantId).indexOf('ink_clean_rescue') >= 0
+      || String(variantId).indexOf('document_ink_clean') >= 0
+    ))
+    && Number(candidate.confidence || 0) >= 0.4
+  ));
+  const fuzzyLookups = [];
+  const seenNeighbor = new Set();
+
+  for (const candidate of fuzzyRescueCandidates) {
+    for (const neighbor of buildTightFuzzyDbNeighbors(candidate)) {
+      if (seenNeighbor.has(neighbor)) continue;
+      seenNeighbor.add(neighbor);
+      const lookup = await apiService.findInvoiceByNumber(neighbor);
+      if (lookup && lookup.found) {
+        fuzzyLookups.push({
+          candidate,
+          nf: neighbor,
+          lookup,
+        });
+      }
+    }
+  }
+
+  if (fuzzyLookups.length !== 1) return null;
+
+  const rescued = fuzzyLookups[0];
+  return {
+    candidate: Object.assign({}, rescued.candidate, {
+      nf: rescued.nf,
+      confidence: Math.max(0.45, Number(rescued.candidate.confidence || 0) - 0.04),
+      method: 'db_fuzzy_rescue',
+      decisionReason: (rescued.candidate.decisionReason || []).concat(['fuzzy_rescue_confirmado_no_banco']),
+    }),
+    lookup: rescued.lookup,
+  };
+};
+
+const resolveCandidateByInvoiceLookup = async ({
+  nfExtraction,
+  currentLookup,
+}) => {
+  const candidates = Array.isArray(nfExtraction.candidates)
+    ? nfExtraction.candidates.slice(0, 6)
+    : [];
+  if (!candidates.length) {
+    return {
+      nfExtraction,
+      invoiceLookup: currentLookup,
+      reranked: false,
+    };
+  }
+
+  const competingStrongCandidate = hasCompetingStrongCandidate(nfExtraction);
+
+  if (currentLookup.found && Number(nfExtraction.confidence || 0) >= 0.9 && !competingStrongCandidate) {
+    return {
+      nfExtraction,
+      invoiceLookup: currentLookup,
+      reranked: false,
+    };
+  }
+
+  const lookups = [];
+  for (const candidate of candidates) {
+    const lookup = await apiService.findInvoiceByNumber(candidate.nf);
+    lookups.push({ candidate, lookup });
+  }
+
+  const confirmed = lookups
+    .filter((item) => item.lookup && item.lookup.found)
+    .sort((left, right) => {
+      const leftCleanPriority = Array.isArray(left.candidate.supportingVariants)
+        && left.candidate.supportingVariants.some((variantId) => (
+          String(variantId).indexOf('ink_clean_rescue') >= 0
+          || String(variantId).indexOf('document_ink_clean') >= 0
+        ));
+      const rightCleanPriority = Array.isArray(right.candidate.supportingVariants)
+        && right.candidate.supportingVariants.some((variantId) => (
+          String(variantId).indexOf('ink_clean_rescue') >= 0
+          || String(variantId).indexOf('document_ink_clean') >= 0
+        ));
+      if (rightCleanPriority !== leftCleanPriority) return rightCleanPriority ? 1 : -1;
+      if (Number(right.candidate.confidence || 0) !== Number(left.candidate.confidence || 0)) {
+        return Number(right.candidate.confidence || 0) - Number(left.candidate.confidence || 0);
+      }
+      if (Number(right.candidate.supportCount || 0) !== Number(left.candidate.supportCount || 0)) {
+        return Number(right.candidate.supportCount || 0) - Number(left.candidate.supportCount || 0);
+      }
+      if (Number(right.candidate.roiSupportCount || 0) !== Number(left.candidate.roiSupportCount || 0)) {
+        return Number(right.candidate.roiSupportCount || 0) - Number(left.candidate.roiSupportCount || 0);
+      }
+      return String(left.candidate.nf).localeCompare(String(right.candidate.nf));
+    });
+
+  if (!confirmed.length) {
+    const rescued = await resolveFuzzyDbRescue(candidates);
+    if (rescued) {
+      return {
+        nfExtraction: hydrateNfExtractionFromCandidate(nfExtraction, rescued.candidate),
+        invoiceLookup: rescued.lookup,
+        reranked: true,
+      };
+    }
+
+    return {
+      nfExtraction,
+      invoiceLookup: currentLookup,
+      reranked: false,
+    };
+  }
+
+  const chosen = confirmed[0];
+  const rescued = await resolveFuzzyDbRescue(candidates);
+  if (
+    rescued
+    && Number(chosen.candidate.confidence || 0) < 0.5
+    && Number(rescued.candidate.confidence || 0) >= Number(chosen.candidate.confidence || 0) + 0.04
+  ) {
+    return {
+      nfExtraction: hydrateNfExtractionFromCandidate(nfExtraction, rescued.candidate),
+      invoiceLookup: rescued.lookup,
+      reranked: true,
+    };
+  }
+  const sameCandidate = chosen.candidate.nf === nfExtraction.nf;
+  const shouldReplace = !sameCandidate && (
+    !currentLookup.found
+    || Number(chosen.candidate.confidence || 0) >= Number(nfExtraction.confidence || 0) - 0.04
+  );
+
+  if (!shouldReplace) {
+    return {
+      nfExtraction,
+      invoiceLookup: currentLookup,
+      reranked: false,
+    };
+  }
+
+  return {
+    nfExtraction: hydrateNfExtractionFromCandidate(nfExtraction, chosen.candidate),
+    invoiceLookup: chosen.lookup,
+    reranked: true,
+  };
+};
 
 const toCheckpointStatus = (condition, fallbackCondition = false) => {
   if (condition) return 'passed';
@@ -287,6 +652,13 @@ module.exports = {
         ? selectedOrientation.alignment.deskewAngle
         : 0,
       warpApplied: !!(selectedOrientation && selectedOrientation.alignment && selectedOrientation.alignment.warpApplied),
+      warpCandidateKind: selectedOrientation && selectedOrientation.alignment
+        ? selectedOrientation.alignment.warpCandidateKind || null
+        : null,
+      warpCandidateQuality: selectedOrientation && selectedOrientation.alignment
+        ? Number(selectedOrientation.alignment.warpCandidateQuality || 0)
+        : 0,
+      suspiciousWarp: !!(selectedOrientation && selectedOrientation.alignment && selectedOrientation.alignment.suspiciousWarp),
       nfAnchor: selectedOrientation && selectedOrientation.alignment
         ? selectedOrientation.alignment.nfAnchor || null
         : null,
@@ -318,11 +690,18 @@ module.exports = {
       status: 'running',
       message: 'Avaliando candidatos de NF com contexto e posicao do campo.',
     });
-    const nfExtraction = await nfExtractorService.extractInvoiceNumber({
+    const nfRescueDocuments = await buildNfRescueDocuments({
+      imagePath,
+      preprocess,
+      orientationProbe: ocrProbe,
+      outputDir,
+      fastMode,
+    });
+    let nfExtraction = await nfExtractorService.extractInvoiceNumber({
       preprocess,
       orientationProbe: ocrProbe,
       validation,
-      documents: structuredOcr.documents,
+      documents: structuredOcr.documents.concat(nfRescueDocuments),
       fullOcr: structuredOcr.fullOcr,
       regionOcr: structuredOcr.regionOcr,
       fastMode,
@@ -347,7 +726,13 @@ module.exports = {
         ? 'Conferindo se a NF extraida existe no banco da MAR E RIO.'
         : 'Pulando consulta ao banco porque nenhuma NF foi extraida.',
     });
-    const invoiceLookup = await apiService.findInvoiceByNumber(nfExtraction.nf);
+    let invoiceLookup = await apiService.findInvoiceByNumber(nfExtraction.nf);
+    const rerankedCandidate = await resolveCandidateByInvoiceLookup({
+      nfExtraction,
+      currentLookup: invoiceLookup,
+    });
+    nfExtraction = rerankedCandidate.nfExtraction;
+    invoiceLookup = rerankedCandidate.invoiceLookup;
     emitProgress({
       step: 'invoice_lookup',
       status: 'completed',

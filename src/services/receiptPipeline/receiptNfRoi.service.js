@@ -13,11 +13,48 @@ const ROI_MAP = NF_ROI_DEFINITIONS.reduce((accumulator, definition) => {
   return accumulator;
 }, {});
 
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
 const persistImage = async (image, filePath) => {
   await ensureDir(path.dirname(filePath));
   await image.getBufferAsync(Jimp.MIME_PNG).then((buffer) => fs.promises.writeFile(filePath, buffer));
   return filePath;
 };
+
+const expandPixelBox = (sourceImage, box, paddingXRatio = 0.1, paddingYRatio = 0.08) => {
+  const paddingX = Math.max(4, Math.floor(box.width * paddingXRatio));
+  const paddingY = Math.max(4, Math.floor(box.height * paddingYRatio));
+  const x = clamp(box.x - paddingX, 0, Math.max(0, sourceImage.bitmap.width - 2));
+  const y = clamp(box.y - paddingY, 0, Math.max(0, sourceImage.bitmap.height - 2));
+  const width = clamp(box.width + (paddingX * 2), 2, sourceImage.bitmap.width - x);
+  const height = clamp(box.height + (paddingY * 2), 2, sourceImage.bitmap.height - y);
+
+  return { x, y, width, height };
+};
+
+const buildTemplateFixedPixelBox = ({ sourceImage, requestedDefinition }) => {
+  const baseBox = receiptTemplateService.buildPixelBox(sourceImage, requestedDefinition.box);
+  const expansionByRoi = {
+    nf_block: { paddingXRatio: 0.14, paddingYRatio: 0.08 },
+    nf_number_line: { paddingXRatio: 0.4, paddingYRatio: 0.28 },
+    nf_number_tight: { paddingXRatio: 0.48, paddingYRatio: 0.24 },
+    nf_header: { paddingXRatio: 0.3, paddingYRatio: 0.24 },
+    nf_block_wide: { paddingXRatio: 0.1, paddingYRatio: 0.08 },
+  };
+  const expansion = expansionByRoi[requestedDefinition.id] || { paddingXRatio: 0.1, paddingYRatio: 0.08 };
+
+  return expandPixelBox(
+    sourceImage,
+    baseBox,
+    expansion.paddingXRatio,
+    expansion.paddingYRatio,
+  );
+};
+
+const isBoxLargeEnough = (box, requestedDefinition) => (
+  box.width >= Number(requestedDefinition.minWidth || 0)
+  && box.height >= Number(requestedDefinition.minHeight || 0)
+);
 
 const resolvePixelBox = ({ sourceImage, requestedDefinition, sourceVariant }) => {
   const nfAnchor = sourceVariant
@@ -35,23 +72,37 @@ const resolvePixelBox = ({ sourceImage, requestedDefinition, sourceVariant }) =>
   }
 
   return {
-    box: receiptTemplateService.buildPixelBox(sourceImage, requestedDefinition.box),
-    layoutStrategy: 'template_fixed',
+    box: buildTemplateFixedPixelBox({ sourceImage, requestedDefinition }),
+    layoutStrategy: 'template_fixed_safe',
     anchorScore: null,
   };
 };
 
 const resolveCropDefinition = ({ sourceImage, requestedDefinition, sourceVariant, visited = [] }) => {
-  const resolvedPixelBox = resolvePixelBox({
+  const anchoredOrFixedPixelBox = resolvePixelBox({
     sourceImage,
     requestedDefinition,
     sourceVariant,
   });
+  let resolvedPixelBox = anchoredOrFixedPixelBox;
+
+  if (
+    anchoredOrFixedPixelBox.layoutStrategy === 'nf_anchor'
+    && !isBoxLargeEnough(anchoredOrFixedPixelBox.box, requestedDefinition)
+  ) {
+    const templateFixedPixelBox = {
+      box: buildTemplateFixedPixelBox({ sourceImage, requestedDefinition }),
+      layoutStrategy: 'template_fixed_safe',
+      anchorScore: null,
+    };
+
+    if (isBoxLargeEnough(templateFixedPixelBox.box, requestedDefinition)) {
+      resolvedPixelBox = templateFixedPixelBox;
+    }
+  }
+
   const box = resolvedPixelBox.box;
-  const tooSmall = (
-    box.width < Number(requestedDefinition.minWidth || 0)
-    || box.height < Number(requestedDefinition.minHeight || 0)
-  );
+  const tooSmall = !isBoxLargeEnough(box, requestedDefinition);
 
   if (!tooSmall || !requestedDefinition.fallbackRoiId) {
     return {

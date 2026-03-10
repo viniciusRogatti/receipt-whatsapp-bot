@@ -195,6 +195,17 @@ const ORIENTATION_PRIMARY_PROBE_PLAN = [
       tessedit_pageseg_mode: '6',
     },
   },
+  {
+    id: 'orientation_nf_block_clean',
+    sourceProfileId: 'document_ink_clean',
+    regionId: 'roi_nf_block',
+    roiProfileId: 'nf_context_gray_2x',
+    sourceType: 'orientation_probe',
+    targetRole: 'orientation_nf_block_clean',
+    parameters: {
+      tessedit_pageseg_mode: '6',
+    },
+  },
 ];
 
 const ORIENTATION_SECONDARY_PROBE_PLAN = [
@@ -336,6 +347,17 @@ const NF_ROI_PRIMARY_PLAN = [
     roiProfileId: 'nf_context_gray_2x',
     sourceType: 'nf_roi',
     targetRole: 'nf_block_context',
+    parameters: {
+      tessedit_pageseg_mode: '6',
+    },
+  },
+  {
+    id: 'nf_block_context_low_gray',
+    roiIds: ['nf_block'],
+    roiProfileId: 'nf_context_gray_2x',
+    sourceType: 'nf_roi',
+    targetRole: 'nf_block_context_low',
+    cropBox: { x: 0.0, y: 0.18, width: 1.0, height: 0.82 },
     parameters: {
       tessedit_pageseg_mode: '6',
     },

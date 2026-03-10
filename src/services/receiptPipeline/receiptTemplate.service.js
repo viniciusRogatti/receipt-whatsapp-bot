@@ -6,8 +6,14 @@ const {
 
 const DEFAULT_BRIGHTNESS_THRESHOLD = 168;
 const DEFAULT_DARKNESS_THRESHOLD = 162;
+const DEFAULT_COMPONENT_BRIGHTNESS_THRESHOLD = 172;
 const DEFAULT_DESKEW_ANGLES = [-4, -3, -2, -1, 0, 1, 2, 3, 4];
 const MAX_PROBE_EDGE = 960;
+const SECONDARY_TRIM_MIN_AREA_RATIO = 0.8;
+const RECEIPT_BAND_PADDING_X_RATIO = 0.08;
+const RECEIPT_BAND_PADDING_Y_RATIO = 0.12;
+const RECEIPT_DOCUMENT_PADDING_X_RATIO = 0.06;
+const SIGNATURE_DARK_RATIO_ALERT = 0.72;
 const WARP_OUTPUT_WIDTH = RECEIPT_TEMPLATE.standardWidth;
 const WARP_OUTPUT_HEIGHT = Math.max(
   120,
@@ -221,48 +227,195 @@ const findReceiptBandBounds = (image, luminanceThreshold = DEFAULT_BRIGHTNESS_TH
     columnCounts[x] += 1;
   });
 
-  const rowThreshold = Math.max(18, Math.floor(width * 0.18));
-  const columnThreshold = Math.max(10, Math.floor(height * 0.12));
-  let top = rowCounts.findIndex((count) => count >= rowThreshold);
-  let bottom = -1;
-  let left = columnCounts.findIndex((count) => count >= columnThreshold);
-  let right = -1;
+  const horizontalBand = findDominantBand(
+    rowCounts,
+    Math.max(20, Math.floor(width * 0.28)),
+  );
+  const verticalBand = findDominantBand(
+    columnCounts,
+    Math.max(20, Math.floor(height * 0.28)),
+  );
+  const candidates = [];
 
-  for (let row = height - 1; row >= 0; row -= 1) {
-    if (rowCounts[row] >= rowThreshold) {
-      bottom = row;
-      break;
+  if (horizontalBand && horizontalBand.length >= Math.max(18, Math.floor(height * 0.06))) {
+    const horizontalColumns = new Array(width).fill(0);
+    for (let y = horizontalBand.start; y <= horizontalBand.end; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const idx = ((y * width) + x) * 4;
+        if (probe.bitmap.data[idx] >= luminanceThreshold) horizontalColumns[x] += 1;
+      }
+    }
+    const columnThreshold = Math.max(10, Math.floor(horizontalBand.length * 0.32));
+    const left = horizontalColumns.findIndex((count) => count >= columnThreshold);
+    let right = -1;
+    for (let x = width - 1; x >= 0; x -= 1) {
+      if (horizontalColumns[x] >= columnThreshold) {
+        right = x;
+        break;
+      }
+    }
+
+    if (left >= 0 && right >= left) {
+      candidates.push({
+        x: left,
+        y: horizontalBand.start,
+        width: right - left + 1,
+        height: horizontalBand.length,
+      });
     }
   }
 
-  for (let column = width - 1; column >= 0; column -= 1) {
-    if (columnCounts[column] >= columnThreshold) {
-      right = column;
-      break;
+  if (verticalBand && verticalBand.length >= Math.max(18, Math.floor(width * 0.06))) {
+    const verticalRows = new Array(height).fill(0);
+    for (let x = verticalBand.start; x <= verticalBand.end; x += 1) {
+      for (let y = 0; y < height; y += 1) {
+        const idx = ((y * width) + x) * 4;
+        if (probe.bitmap.data[idx] >= luminanceThreshold) verticalRows[y] += 1;
+      }
+    }
+    const rowThreshold = Math.max(10, Math.floor(verticalBand.length * 0.32));
+    const top = verticalRows.findIndex((count) => count >= rowThreshold);
+    let bottom = -1;
+    for (let y = height - 1; y >= 0; y -= 1) {
+      if (verticalRows[y] >= rowThreshold) {
+        bottom = y;
+        break;
+      }
+    }
+
+    if (top >= 0 && bottom >= top) {
+      candidates.push({
+        x: verticalBand.start,
+        y: top,
+        width: verticalBand.length,
+        height: bottom - top + 1,
+      });
     }
   }
 
-  if (top < 0 || left < 0 || bottom < top || right < left) {
-    return null;
-  }
+  const ranked = candidates
+    .map((candidate) => {
+      const areaRatio = (candidate.width * candidate.height) / Math.max(1, width * height);
+      const aspectRatio = Math.max(candidate.width, candidate.height) / Math.max(1, Math.min(candidate.width, candidate.height));
+      const rectangularity = areaRatio * aspectRatio;
+      return Object.assign({}, candidate, {
+        score: rectangularity * aspectRatio,
+      });
+    })
+    .filter((candidate) => (
+      Math.max(candidate.width, candidate.height) / Math.max(1, Math.min(candidate.width, candidate.height)) >= 2.8
+    ))
+    .sort((left, right) => right.score - left.score);
 
-  const heightRatio = (bottom - top + 1) / Math.max(1, height);
-  const widthRatio = (right - left + 1) / Math.max(1, width);
-
-  if (heightRatio < 0.06 || widthRatio < 0.35) {
-    return null;
-  }
+  if (!ranked.length) return null;
 
   return expandBounds(
     image,
-    mapBoundsToSource(image, probe, {
-      x: left,
-      y: top,
-      width: right - left + 1,
-      height: bottom - top + 1,
-    }),
-    0.04,
-    0.12,
+    mapBoundsToSource(image, probe, ranked[0]),
+    RECEIPT_BAND_PADDING_X_RATIO,
+    RECEIPT_BAND_PADDING_Y_RATIO,
+  );
+};
+
+const findReceiptComponentBounds = (image, luminanceThreshold = DEFAULT_COMPONENT_BRIGHTNESS_THRESHOLD) => {
+  const probe = scaleDownForProbe(
+    image.clone().greyscale().normalize().brightness(0.04).contrast(0.25),
+  );
+  const width = probe.bitmap.width;
+  const height = probe.bitmap.height;
+  const totalPixels = width * height;
+  const mask = new Uint8Array(totalPixels);
+  const visited = new Uint8Array(totalPixels);
+  const stack = [];
+  let bestComponent = null;
+
+  probe.scan(0, 0, width, height, function scanPixel(x, y, idx) {
+    const luminance = getLuminanceAt(this.bitmap, idx);
+    if (luminance >= luminanceThreshold) {
+      mask[(y * width) + x] = 1;
+    }
+  });
+
+  for (let pixelIndex = 0; pixelIndex < totalPixels; pixelIndex += 1) {
+    if (!mask[pixelIndex] || visited[pixelIndex]) continue;
+
+    let area = 0;
+    let minX = width;
+    let minY = height;
+    let maxX = 0;
+    let maxY = 0;
+    stack.push(pixelIndex);
+    visited[pixelIndex] = 1;
+
+    while (stack.length) {
+      const current = stack.pop();
+      const x = current % width;
+      const y = Math.floor(current / width);
+      area += 1;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          if (!offsetX && !offsetY) continue;
+          const nextX = x + offsetX;
+          const nextY = y + offsetY;
+          if (nextX < 0 || nextY < 0 || nextX >= width || nextY >= height) continue;
+
+          const nextIndex = (nextY * width) + nextX;
+          if (!mask[nextIndex] || visited[nextIndex]) continue;
+          visited[nextIndex] = 1;
+          stack.push(nextIndex);
+        }
+      }
+    }
+
+    const componentWidth = maxX - minX + 1;
+    const componentHeight = maxY - minY + 1;
+    const boundsArea = componentWidth * componentHeight;
+    const areaRatio = area / Math.max(1, totalPixels);
+    const rectangularity = area / Math.max(1, boundsArea);
+    const longestEdge = Math.max(componentWidth, componentHeight);
+    const shortestEdge = Math.max(1, Math.min(componentWidth, componentHeight));
+    const aspectRatio = longestEdge / shortestEdge;
+
+    if (areaRatio < 0.006) continue;
+    if (componentWidth < Math.max(24, Math.floor(width * 0.08))) continue;
+    if (componentHeight < Math.max(18, Math.floor(height * 0.03))) continue;
+    if (rectangularity < 0.64) continue;
+    if (aspectRatio < 2.4) continue;
+
+    const elongatedBonus = aspectRatio >= 6
+      ? 3
+      : aspectRatio >= 4
+        ? 2.2
+        : 1.6;
+    const score = area
+      * aspectRatio
+      * aspectRatio
+      * elongatedBonus
+      * (0.6 + (rectangularity * rectangularity * 2.2));
+
+    if (!bestComponent || score > bestComponent.score) {
+      bestComponent = {
+        score,
+        x: minX,
+        y: minY,
+        width: componentWidth,
+        height: componentHeight,
+      };
+    }
+  }
+
+  if (!bestComponent) return null;
+
+  return expandBounds(
+    image,
+    mapBoundsToSource(image, probe, bestComponent),
+    0.06,
+    0.2,
   );
 };
 
@@ -320,8 +473,8 @@ const findReceiptDarkBandBounds = (image, darknessThreshold = DEFAULT_DARKNESS_T
       width: right - left + 1,
       height: bottom - top + 1,
     }),
-    0.04,
-    0.1,
+    RECEIPT_BAND_PADDING_X_RATIO,
+    RECEIPT_BAND_PADDING_Y_RATIO,
   );
 };
 
@@ -935,6 +1088,150 @@ const buildAnchoredPixelBox = (image, box, anchor = null) => {
   return { x, y, width, height };
 };
 
+const applySecondaryTrim = (image) => {
+  const trimmedBounds = findDocumentBounds(image.clone().greyscale().normalize().contrast(0.22));
+
+  if (!trimmedBounds) {
+    return {
+      image: image.clone(),
+      applied: false,
+      bounds: null,
+      areaRatio: 1,
+    };
+  }
+
+  const trimmedArea = trimmedBounds.width * trimmedBounds.height;
+  const fullArea = Math.max(1, image.bitmap.width * image.bitmap.height);
+  const areaRatio = trimmedArea / fullArea;
+
+  if (areaRatio < SECONDARY_TRIM_MIN_AREA_RATIO) {
+    return {
+      image: image.clone(),
+      applied: false,
+      bounds: trimmedBounds,
+      areaRatio: Number(areaRatio.toFixed(3)),
+    };
+  }
+
+  return {
+    image: image.clone().crop(
+      trimmedBounds.x,
+      trimmedBounds.y,
+      trimmedBounds.width,
+      trimmedBounds.height,
+    ),
+    applied: true,
+    bounds: trimmedBounds,
+    areaRatio: Number(areaRatio.toFixed(3)),
+  };
+};
+
+const normalizeToTemplateCanvas = (image) => {
+  if (
+    image.bitmap.width === WARP_OUTPUT_WIDTH
+    && image.bitmap.height === WARP_OUTPUT_HEIGHT
+  ) {
+    return image.clone();
+  }
+
+  const sourceWidth = Math.max(1, image.bitmap.width);
+  const sourceHeight = Math.max(1, image.bitmap.height);
+  const scale = Math.max(
+    WARP_OUTPUT_WIDTH / sourceWidth,
+    WARP_OUTPUT_HEIGHT / sourceHeight,
+  );
+  const resizedWidth = Math.max(2, Math.round(sourceWidth * scale));
+  const resizedHeight = Math.max(2, Math.round(sourceHeight * scale));
+  const resized = image.clone().resize(resizedWidth, resizedHeight);
+  const cropX = clamp(
+    Math.floor((resizedWidth - WARP_OUTPUT_WIDTH) / 2),
+    0,
+    Math.max(0, resizedWidth - WARP_OUTPUT_WIDTH),
+  );
+  const cropY = clamp(
+    Math.floor((resizedHeight - WARP_OUTPUT_HEIGHT) / 2),
+    0,
+    Math.max(0, resizedHeight - WARP_OUTPUT_HEIGHT),
+  );
+
+  return resized.crop(cropX, cropY, WARP_OUTPUT_WIDTH, WARP_OUTPUT_HEIGHT);
+};
+
+const buildAlignmentCandidate = ({
+  sourceImage,
+  candidateImage,
+  kind,
+  warped = false,
+  geometry = null,
+}) => {
+  const deskew = estimateDeskewAngle(candidateImage);
+  const deskewed = deskew.angle ? candidateImage.clone().rotate(deskew.angle, false) : candidateImage.clone();
+  const secondaryTrim = applySecondaryTrim(deskewed);
+  const aligned = normalizeToTemplateCanvas(secondaryTrim.image);
+
+  const nfAnchor = detectNfAnchorBox(aligned.clone());
+  const signatureCheck = assessSignaturePresence(aligned.clone());
+  const referenceAspectRatio = Number(
+    geometry && Number.isFinite(geometry.aspectRatio)
+      ? geometry.aspectRatio
+      : candidateImage.bitmap.width / Math.max(1, candidateImage.bitmap.height),
+  );
+  const aspectDelta = Math.abs(referenceAspectRatio - RECEIPT_TEMPLATE.aspectRatio);
+  const aspectScore = Math.max(0, 1 - (aspectDelta / Math.max(RECEIPT_TEMPLATE.aspectRatio, 1)));
+  const geometryScore = Number(geometry && geometry.geometryScore) || 0;
+  const anchorScore = nfAnchor && nfAnchor.detected ? Number(nfAnchor.score || 0) : 0;
+  const signaturePenalty = (
+    signatureCheck
+    && signatureCheck.darkRatio >= SIGNATURE_DARK_RATIO_ALERT
+    && signatureCheck.rowCoverage >= 0.9
+    && signatureCheck.columnCoverage >= 0.9
+  )
+    ? 0.45
+    : 0;
+  const warpPenalty = warped && referenceAspectRatio < RECEIPT_TEMPLATE.minAspectRatio
+    ? Number(Math.min(
+      0.45,
+      ((RECEIPT_TEMPLATE.minAspectRatio - referenceAspectRatio) / Math.max(RECEIPT_TEMPLATE.minAspectRatio, 1)) * 0.7,
+    ).toFixed(2))
+    : 0;
+  const trimPenalty = secondaryTrim.applied === false && secondaryTrim.bounds && secondaryTrim.areaRatio < 0.9
+    ? 0.08
+    : 0;
+  const qualityScore = Number(Math.max(
+    0,
+    Math.min(
+      1,
+      (aspectScore * 0.34)
+      + (geometryScore * 0.34)
+      + (anchorScore * 0.22)
+      + ((geometry && geometry.templateMatched) ? 0.08 : 0)
+      - signaturePenalty
+      - warpPenalty
+      - trimPenalty,
+    ),
+  ).toFixed(2));
+
+  return {
+    kind,
+    warped,
+    alignedImage: aligned,
+    deskew,
+    nfAnchor,
+    signatureCheck,
+    geometry,
+    qualityScore,
+    rawAspectRatio: Number(referenceAspectRatio.toFixed(2)),
+    secondaryTrim,
+    suspiciousSignature: signaturePenalty > 0,
+    suspiciousWarp: warpPenalty > 0,
+    normalized: {
+      width: aligned.bitmap.width,
+      height: aligned.bitmap.height,
+      aspectRatio: Number((aligned.bitmap.width / Math.max(1, aligned.bitmap.height)).toFixed(2)),
+    },
+  };
+};
+
 module.exports = {
   buildPixelBox,
   buildAnchoredPixelBox,
@@ -948,7 +1245,14 @@ module.exports = {
     const candidateBounds = [
       darkBandBounds,
       brightBandBounds,
-      documentBounds ? expandBounds(normalized, documentBounds, 0.03, 0.12) : null,
+      documentBounds
+        ? expandBounds(
+          normalized,
+          documentBounds,
+          RECEIPT_DOCUMENT_PADDING_X_RATIO,
+          RECEIPT_BAND_PADDING_Y_RATIO,
+        )
+        : null,
     ].filter(Boolean);
 
     const ranked = candidateBounds
@@ -995,52 +1299,106 @@ module.exports = {
 
   alignReceiptToTemplate(image) {
     const contour = this.detectReceiptContour(image);
+    const alignmentGeometry = computeTemplateGeometryScore(image, contour);
     const warped = contour.corners ? warpPerspective(image.clone(), contour.corners) : null;
-    const baseAligned = warped
-      ? warped.clone()
-      : contour.bounds
-        ? image.clone().crop(contour.bounds.x, contour.bounds.y, contour.bounds.width, contour.bounds.height)
-        : image.clone();
-    const deskew = estimateDeskewAngle(baseAligned);
-    const deskewed = deskew.angle ? baseAligned.clone().rotate(deskew.angle, false) : baseAligned.clone();
-    const trimmedBounds = findDocumentBounds(deskewed.clone().greyscale().normalize().contrast(0.22));
-    const trimmed = trimmedBounds
-      ? deskewed.clone().crop(trimmedBounds.x, trimmedBounds.y, trimmedBounds.width, trimmedBounds.height)
-      : deskewed;
-    const aligned = trimmed.clone();
+    const contourCrop = contour.bounds
+      ? image.clone().crop(contour.bounds.x, contour.bounds.y, contour.bounds.width, contour.bounds.height)
+      : image.clone();
+    const componentBounds = findReceiptComponentBounds(image.clone());
+    const componentCrop = componentBounds
+      ? image.clone().crop(
+        componentBounds.x,
+        componentBounds.y,
+        componentBounds.width,
+        componentBounds.height,
+      )
+      : null;
+    const brightBandBounds = findReceiptBandBounds(image.clone());
+    const brightBandCrop = brightBandBounds
+      ? image.clone().crop(
+        brightBandBounds.x,
+        brightBandBounds.y,
+        brightBandBounds.width,
+        brightBandBounds.height,
+      )
+      : null;
+    const brightBandGeometry = brightBandBounds
+      ? computeTemplateGeometryScore(image, brightBandBounds)
+      : null;
+    const candidates = [
+      buildAlignmentCandidate({
+        sourceImage: image,
+        candidateImage: warped || contourCrop,
+        kind: warped ? 'warp' : 'contour_crop',
+        warped: !!warped,
+        geometry: alignmentGeometry,
+      }),
+    ];
 
-    if (
-      aligned.bitmap.width !== WARP_OUTPUT_WIDTH
-      || aligned.bitmap.height !== WARP_OUTPUT_HEIGHT
-    ) {
-      aligned.resize(WARP_OUTPUT_WIDTH, WARP_OUTPUT_HEIGHT);
+    if (brightBandCrop) {
+      candidates.push(buildAlignmentCandidate({
+        sourceImage: image,
+        candidateImage: brightBandCrop,
+        kind: 'bright_band_crop',
+        warped: false,
+        geometry: brightBandGeometry,
+      }));
     }
 
-    const alignmentGeometry = computeTemplateGeometryScore(image, contour);
-    const nfAnchor = detectNfAnchorBox(aligned.clone());
-    const signatureCheck = assessSignaturePresence(aligned.clone());
+    if (componentCrop) {
+      candidates.push(buildAlignmentCandidate({
+        sourceImage: image,
+        candidateImage: componentCrop,
+        kind: 'component_crop',
+        warped: false,
+        geometry: computeTemplateGeometryScore(image, componentBounds),
+      }));
+    }
+
+    const selectedCandidate = candidates
+      .slice()
+      .sort((left, right) => right.qualityScore - left.qualityScore)[0];
+    const aligned = selectedCandidate.alignedImage.clone();
+    const nfAnchor = selectedCandidate.nfAnchor;
+    const signatureCheck = selectedCandidate.signatureCheck;
+    const selectedGeometry = selectedCandidate.geometry || alignmentGeometry;
 
     return {
       alignedImage: aligned,
       contour,
       deskew: {
-        angle: deskew.angle,
-        score: Number(deskew.score.toFixed(2)),
+        angle: selectedCandidate.deskew.angle,
+        score: Number(selectedCandidate.deskew.score.toFixed(2)),
       },
       warp: {
-        applied: !!warped,
+        applied: !!selectedCandidate.warped,
         outputWidth: WARP_OUTPUT_WIDTH,
         outputHeight: WARP_OUTPUT_HEIGHT,
+        candidateKind: selectedCandidate.kind,
+        candidateQuality: selectedCandidate.qualityScore,
+        suspiciousWarp: !!selectedCandidate.suspiciousWarp,
       },
       nfAnchor,
       signatureCheck,
-      normalized: {
-        width: aligned.bitmap.width,
-        height: aligned.bitmap.height,
-        aspectRatio: Number((aligned.bitmap.width / Math.max(1, aligned.bitmap.height)).toFixed(2)),
-      },
-      templateMatched: alignmentGeometry.templateMatched,
-      geometryScore: alignmentGeometry.geometryScore,
+      normalized: selectedCandidate.normalized,
+      templateMatched: selectedGeometry.templateMatched,
+      geometryScore: selectedGeometry.geometryScore,
+      debugCandidates: candidates
+        .slice()
+        .sort((left, right) => right.qualityScore - left.qualityScore)
+        .map((candidate) => ({
+          kind: candidate.kind,
+          warped: candidate.warped,
+          qualityScore: candidate.qualityScore,
+          rawAspectRatio: candidate.rawAspectRatio,
+          geometryScore: Number(candidate.geometry && candidate.geometry.geometryScore || 0),
+          templateMatched: !!(candidate.geometry && candidate.geometry.templateMatched),
+          suspiciousSignature: !!candidate.suspiciousSignature,
+          suspiciousWarp: !!candidate.suspiciousWarp,
+          secondaryTrimApplied: !!(candidate.secondaryTrim && candidate.secondaryTrim.applied),
+          secondaryTrimAreaRatio: candidate.secondaryTrim ? candidate.secondaryTrim.areaRatio : 1,
+          normalized: candidate.normalized,
+        })),
     };
   },
 

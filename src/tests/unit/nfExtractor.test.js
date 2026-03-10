@@ -17,12 +17,12 @@ module.exports = () => ([
               roiId: 'nf_block',
               sourceVariantId: 'upright__document_gray',
             },
-            textRaw: 'NF-e\nN° 16171762\nSÉRIE 1',
+            textRaw: 'NF-e\nN° 1711762\nSÉRIE 1',
           },
         ],
       });
 
-      assert.strictEqual(result.nf, '16171762');
+      assert.strictEqual(result.nf, '1711762');
       assert.strictEqual(result.context.foundNfe, true);
       assert.ok(result.confidence >= 0.78);
     },
@@ -42,7 +42,7 @@ module.exports = () => ([
               roiId: 'nf_block',
               sourceVariantId: 'upright__document_gray',
             },
-            textRaw: 'NF-e N° 16171762',
+            textRaw: 'NF-e N° 1711762',
           },
           {
             id: 'roi2',
@@ -54,12 +54,12 @@ module.exports = () => ([
               roiId: 'nf_number_line',
               sourceVariantId: 'upright__document_gray',
             },
-            textRaw: '16171762',
+            textRaw: '1711762',
           },
         ],
       });
 
-      assert.strictEqual(result.nf, '16171762');
+      assert.strictEqual(result.nf, '1711762');
       assert.ok(result.confidence >= 0.82);
       assert.ok(result.supportCount >= 2);
       assert.ok(result.roiSupportCount >= 2);
@@ -256,6 +256,29 @@ module.exports = () => ([
       assert.strictEqual(result.nf, '1710496');
       assert.ok(result.confidence >= 0.96);
       assert.strictEqual(result.roiSupportCount >= 2, true);
+    },
+  },
+  {
+    name: 'nfExtractor ignora candidato com 8 digitos quando a operacao aceita apenas 7',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'nf-8-digitos',
+            sourceType: 'nf_roi',
+            confidence: 90,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: 'NF-e N° 16171762 SERIE 1',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, null);
     },
   },
 ]);

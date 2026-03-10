@@ -52,6 +52,12 @@ const selectSourceVariants = ({ preprocess, orientationProbe, phase, fastMode = 
       variants.push(grayVariant);
     }
 
+    const inkCleanVariant = findVariant(preprocess, orientationId, 'document_ink_clean');
+    if (inkCleanVariant && !seen.has(inkCleanVariant.id)) {
+      seen.add(inkCleanVariant.id);
+      variants.push(inkCleanVariant);
+    }
+
     if (phase === 'primary' && orientationId === resolveOrientationId(preprocess, orientationProbe)) {
       const binaryVariant = findVariant(preprocess, orientationId, 'document_binary');
       if (binaryVariant && !seen.has(binaryVariant.id)) {

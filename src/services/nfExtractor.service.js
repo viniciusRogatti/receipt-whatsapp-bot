@@ -13,8 +13,22 @@ const receiptNfOcrService = require('./receiptPipeline/receiptNfOcr.service');
 
 const NF_MARKER_REGEX = /\b(?:nf\s*e|nfe|nota fiscal(?: eletronica)?)\b/gi;
 const NUMBER_MARKER_REGEX = /\b(?:numero|n\s*o|nro|no)\b/gi;
-const DIGIT_GROUP_REGEX = /\b\d{5,10}\b/g;
+const buildExpectedDigitRegexFragment = () => (
+  (Array.isArray(env.ocrExpectedNfLengths) && env.ocrExpectedNfLengths.length
+    ? env.ocrExpectedNfLengths
+    : [7]
+  )
+    .map((size) => `\\d{${size}}`)
+    .join('|')
+);
+const EXPECTED_DIGIT_FRAGMENT = buildExpectedDigitRegexFragment();
+const DIGIT_GROUP_REGEX = new RegExp(`\\b(?:${EXPECTED_DIGIT_FRAGMENT})\\b`, 'g');
 const FUZZY_DIGIT_SEQUENCE_REGEX = /[0-9A-Z!]+/gi;
+const EXPECTED_NF_LENGTHS = Array.isArray(env.ocrExpectedNfLengths) && env.ocrExpectedNfLengths.length
+  ? env.ocrExpectedNfLengths.slice().sort((left, right) => left - right)
+  : [7];
+const MAX_EXPECTED_NF_LENGTH = EXPECTED_NF_LENGTHS[EXPECTED_NF_LENGTHS.length - 1];
+const OVERFLOW_DIGIT_SEQUENCE_REGEX = new RegExp(`\\d{${MAX_EXPECTED_NF_LENGTH + 1},${MAX_EXPECTED_NF_LENGTH + 4}}`, 'g');
 const OCR_FUZZY_DIGIT_MAP = {
   B: '8',
   D: '0',
@@ -133,7 +147,7 @@ const isExpectedNfLength = (nf) => {
   const size = String(nf || '').length;
   return Array.isArray(env.ocrExpectedNfLengths) && env.ocrExpectedNfLengths.length
     ? env.ocrExpectedNfLengths.includes(size)
-    : size >= 5 && size <= 8;
+    : size === 7;
 };
 
 const normalizeFuzzyDigitSequence = (value) => {
@@ -204,6 +218,68 @@ const extractFuzzyDigitCandidates = (value) => collectRegexMatches(
   && match.droppedCount <= 2
 ));
 
+const buildDigitSubsequences = (digits, targetLength) => {
+  const values = new Set();
+  const visit = (index, prefix) => {
+    if (prefix.length === targetLength) {
+      values.add(prefix);
+      return;
+    }
+
+    if (index >= digits.length) return;
+    const remainingDigits = digits.length - index;
+    const remainingSlots = targetLength - prefix.length;
+    if (remainingDigits < remainingSlots) return;
+
+    for (let cursor = index; cursor < digits.length; cursor += 1) {
+      visit(cursor + 1, prefix + digits[cursor]);
+    }
+  };
+
+  visit(0, '');
+  return Array.from(values);
+};
+
+const extractFuzzyOverflowDigitCandidates = (value) => collectRegexMatches(
+  normalizeOcrNoise(value).toUpperCase(),
+  FUZZY_DIGIT_SEQUENCE_REGEX,
+).flatMap((match) => {
+  const normalized = normalizeFuzzyDigitSequence(match.match);
+
+  if (normalized.digits.length <= MAX_EXPECTED_NF_LENGTH || normalized.digits.length > MAX_EXPECTED_NF_LENGTH + 2) {
+    return [];
+  }
+
+  return EXPECTED_NF_LENGTHS.flatMap((size) => buildDigitSubsequences(normalized.digits, size).map((digits) => ({
+    match: match.match,
+    digits,
+    index: match.index,
+    mappedCount: normalized.mappedCount,
+    droppedCount: normalized.droppedCount,
+    digitCount: normalized.digitCount,
+  })));
+}).filter((match) => isExpectedNfLength(match.digits));
+
+const extractOverflowDigitCandidates = (value) => collectRegexMatches(
+  normalizeOcrNoise(value),
+  OVERFLOW_DIGIT_SEQUENCE_REGEX,
+).flatMap((match) => EXPECTED_NF_LENGTHS.flatMap((size) => {
+  if (!match.match || match.match.length <= size) return [];
+
+  const windows = [];
+  for (let start = 0; start <= match.match.length - size; start += 1) {
+    windows.push({
+      match: match.match,
+      index: match.index + start,
+      digits: match.match.slice(start, start + size),
+      windowStart: start,
+      windowSize: size,
+    });
+  }
+
+  return windows;
+}));
+
 const buildSourceBonus = (source) => {
   let score = 0;
   const requestedRoiId = source.meta && source.meta.requestedRoiId ? source.meta.requestedRoiId : source.requestedRoiId;
@@ -225,17 +301,21 @@ const buildSourceBonus = (source) => {
     score += 0.12;
   }
 
+  if (targetRole.indexOf('clean_rescue') >= 0 || targetRole.indexOf('ink_clean') >= 0) {
+    score += 0.18;
+  }
+
   return score;
 };
 
 const DIRECT_PATTERNS = [
   {
     id: 'nf_context_number',
-    regex: /\b(?:nf\s*e|nfe|nota fiscal(?: eletronica)?)\b[\s\S]{0,28}?(?:\b(?:numero|n\s*o|nro|no)\b[\s\S]{0,8}?)?(\d{5,8})\b/gi,
+    regex: new RegExp(`\\b(?:nf\\s*e|nfe|nota fiscal(?: eletronica)?)\\b[\\s\\S]{0,28}?(?:\\b(?:numero|n\\s*o|nro|no)\\b[\\s\\S]{0,8}?)?(?<!\\d)((?:${EXPECTED_DIGIT_FRAGMENT}))(?!\\d)`, 'gi'),
   },
   {
     id: 'number_context_nf',
-    regex: /\b(?:numero|n\s*o|nro|no)\b[\s\S]{0,8}?(\d{5,8})\b/gi,
+    regex: new RegExp(`\\b(?:numero|n\\s*o|nro|no)\\b[\\s\\S]{0,8}?(?<!\\d)((?:${EXPECTED_DIGIT_FRAGMENT}))(?!\\d)`, 'gi'),
     requiresNfeContext: true,
   },
 ];
@@ -250,6 +330,7 @@ const buildCandidate = ({
   directPattern = false,
   fuzzyPattern = false,
   fuzzyMeta = null,
+  overflowPattern = false,
 }) => {
   const digits = digitsOnly(nf);
   const searchableWindow = String(
@@ -302,6 +383,11 @@ const buildCandidate = ({
   if (fuzzyPattern) {
     confidence -= 0.04;
     reasons.push('sequencia_ocr_fuzzy');
+  }
+
+  if (overflowPattern) {
+    confidence -= 0.06;
+    reasons.push('sequencia_maior_recortada');
   }
 
   if (fuzzyMeta && fuzzyMeta.mappedCount) {
@@ -389,6 +475,15 @@ const extractCandidatesFromTextSource = (source) => {
     });
 
     if (windowContext.foundNfe || windowContext.foundNumeroMarker || source.sourceType.indexOf('nf_roi') >= 0) {
+      const sourceTargetRole = String(source.targetRole || (source.meta && source.meta.targetRole) || '');
+      const variantProfileId = String(source.meta && source.meta.variantProfileId || '');
+      const allowOverflowRescue = (
+        sourceTargetRole.indexOf('clean_rescue') >= 0
+        || variantProfileId === 'document_ink_clean'
+        || variantProfileId === 'document_ink_clean_rescue'
+        || variantProfileId === 'document_ink_clean_rescue_sharp'
+      );
+
       extractFuzzyDigitCandidates(rawText).forEach((match) => {
         const key = `${source.id}:fuzzy:${match.digits}:${match.index}`;
         if (seen[key]) return;
@@ -407,6 +502,45 @@ const extractCandidatesFromTextSource = (source) => {
           },
         }));
       });
+
+      if (sourceTargetRole.indexOf('clean_rescue') >= 0) {
+        extractFuzzyOverflowDigitCandidates(rawText).forEach((match) => {
+          const key = `${source.id}:fuzzy-overflow:${match.digits}:${match.index}`;
+          if (seen[key]) return;
+          seen[key] = true;
+          candidates.push(buildCandidate({
+            nf: match.digits,
+            source,
+            evidence: match.match,
+            method: 'window_context_fuzzy_overflow',
+            windowText: rawText,
+            searchableWindowText: searchableText,
+            fuzzyPattern: true,
+            overflowPattern: true,
+            fuzzyMeta: {
+              mappedCount: match.mappedCount,
+              droppedCount: match.droppedCount,
+            },
+          }));
+        });
+      }
+
+      if (allowOverflowRescue) {
+        extractOverflowDigitCandidates(searchableText).forEach((match) => {
+          const key = `${source.id}:overflow:${match.digits}:${match.index}`;
+          if (seen[key]) return;
+          seen[key] = true;
+          candidates.push(buildCandidate({
+            nf: match.digits,
+            source,
+            evidence: match.match,
+            method: 'window_context_overflow',
+            windowText: rawText,
+            searchableWindowText: searchableText,
+            overflowPattern: true,
+          }));
+        });
+      }
     }
   });
 
