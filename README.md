@@ -140,7 +140,7 @@ Variaveis principais:
 - `OCR_REGION_LANG`: idioma do OCR por regiao
 - `OCR_LANG_PATH`: onde buscar os `.traineddata`
 - `OCR_REGION_MIN_EDGE`: menor lado alvo para ampliar recortes pequenos da caixa da NF antes do OCR
-- `OCR_NF_EXPECTED_LENGTHS`: tamanhos aceitos para a NF, por exemplo `7` ou `7,8`
+- `OCR_NF_EXPECTED_LENGTHS`: tamanhos aceitos para a NF. No fluxo atual da MAR E RIO, use `7`
 - `OCR_SUPPRESS_CONSOLE_NOISE`: remove o ruido verboso do Tesseract no terminal
 - `RECEIPT_INVOICE_LOOKUP_MODE`: `auto`, `backend_db`, `mock` ou `disabled`
 - `RECEIPT_INVOICE_LOOKUP_COMPANY_CODE`: empresa consultada no banco, por padrao `mar_e_rio`
@@ -230,8 +230,10 @@ No `test:local`, o comportamento padrao agora e:
 
 - console silencioso, sem o ruido interno do Tesseract
 - relatorio final enxuto
+- primeira passada em `local_fast`, com `batch_fallback` automatico quando a NF nao fecha, nao existe no banco ou fica ambigua
 - em caso de sucesso, mostra apenas `NF lida + tempo`
 - em caso de falha ou `review`, mostra `em qual parte falhou + tempo`
+- quando o nome do arquivo esta no formato `1234567.jpeg`, o runner compara a NF lida com esse valor e destaca leitura incorreta no relatorio final
 
 Exemplo de saida do `npm run test:local`:
 
@@ -240,13 +242,17 @@ Relatorio final dos canhotos
 Total processado: 3
 Validas: 2 | Revisao: 1 | Invalidas: 0
 NFs lidas com sucesso: 2
+NFs corretas pelo nome do arquivo: 2/3
 Tempo medio por imagem: 8.4s
 
 NFs lidas com sucesso
 - foto-1.jpeg: NF 1710496 | tempo 6.8s
 - foto-2.jpeg: NF 1710531 | tempo 7.1s | origem confirmada no banco
 
-Falhas ou revisao
+NFs lidas incorretamente
+- 1710487.jpeg: NF lida 1710457 | esperado 1710487 | classificacao review | tempo 12.0s
+
+Falhas sem NF
 - foto-3.jpeg: review | falhou em: DATA DE RECEBIMENTO, Bloco NF-e | NF nao detectada | tempo 11.3s
 ```
 
@@ -254,6 +260,7 @@ Falhas ou revisao
 
 - o `test:local` agora roda em modo rapido por padrao
 - o modo rapido reduz o numero de rotacoes, corta OCR global desnecessario, simplifica confirmacoes da NF e imprime apenas o relatorio final
+- quando a passada rapida fica ambigua, o runner sobe automaticamente para `batch_fallback` so naquela imagem
 - o Tesseract continua sendo o maior custo da pipeline; por isso o caminho local foi otimizado para diagnostico rapido, nao para debug visual detalhado
 - cada resultado continua salvando `timings`, entao voce consegue medir `preprocess`, `orientation`, `nfExtraction` e `totalMs`
 - quando precisar de mais profundidade visual, use `npm run debug:ui`
