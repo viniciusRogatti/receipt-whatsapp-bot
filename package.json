@@ -8,6 +8,9 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node src/server.js",
+    "api": "node src/http/server.js",
+    "worker": "node src/worker.js",
+    "worker:once": "node src/worker.js --once",
     "debug:ui": "node src/debug-server/server.js",
     "test": "node src/tests/runUnitTests.js",
     "test:local": "node src/tests/localImageRunner.js",

@@ -7,9 +7,13 @@ const testModules = [
   require('./unit/variantRelation.test'),
   require('./unit/receiptDetector.test'),
   require('./unit/nfExtractor.test'),
+  require('./unit/receiptAnalysis.test'),
   require('./unit/receiptClassifier.test'),
   require('./unit/receiptValidation.test'),
   require('./unit/receiptTemplate.test'),
+  require('./unit/profileResolver.test'),
+  require('./unit/fileJobQueue.test'),
+  require('./unit/documentFieldParser.test'),
 ];
 
 async function main() {

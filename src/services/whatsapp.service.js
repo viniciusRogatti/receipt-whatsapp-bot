@@ -1,5 +1,13 @@
 const path = require('path');
+const env = require('../config/env');
+const receiptProfile = require('../config/receiptProfile');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../config/receiptProfiles');
 const receiptAnalysisService = require('./receiptAnalysis.service');
+const receiptIngestionService = require('./ingestion/receiptIngestion.service');
+
+const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
 
 const buildReplyMessage = (analysis) => {
   if (!analysis || !analysis.classification) return 'Nao foi possivel analisar a imagem enviada.';
@@ -25,7 +33,7 @@ const buildReplyMessage = (analysis) => {
     return 'Nao consegui validar o canhoto com seguranca. Reenvie uma foto mais nitida e centralizada.';
   }
 
-  return 'A imagem nao trouxe os campos minimos do canhoto. Reenvie uma foto com DATA DE RECEBIMENTO, RECEBEMOS DE MAR E RIO e NF-e visiveis.';
+  return `A imagem nao trouxe os campos minimos do canhoto. Reenvie uma foto com DATA DE RECEBIMENTO, ${issuerHeaderLabel} e NF-e visiveis.`;
 };
 
 module.exports = {
@@ -40,6 +48,33 @@ module.exports = {
   },
 
   async handleIncomingImageMessage({ message, mediaPath, reply, outputDir }) {
+    if (env.receiptAsyncWhatsappMode) {
+      const ingestResult = await receiptIngestionService.ingestReceipt({
+        payload: {
+          companyId: message && message.companyId ? message.companyId : undefined,
+          documentType: 'delivery_receipt',
+          metadata: {
+            groupId: message && message.groupId ? message.groupId : null,
+            messageId: message && message.id ? message.id : null,
+            sender: message && message.sender ? message.sender : null,
+          },
+        },
+        headers: {},
+        uploadedFile: {
+          path: mediaPath,
+          originalName: path.basename(mediaPath || 'receipt.jpg'),
+        },
+        sourceHint: 'whatsapp',
+      });
+
+      return {
+        queued: true,
+        replied: false,
+        replyMessage: null,
+        ingestion: ingestResult,
+      };
+    }
+
     const analysis = await receiptAnalysisService.analyzeImage({
       imagePath: mediaPath,
       outputDir: outputDir || path.join(process.cwd(), 'outputs', 'whatsapp'),

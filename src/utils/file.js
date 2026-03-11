@@ -69,9 +69,32 @@ const writeJsonFile = async (targetPath, payload) => {
   return targetPath;
 };
 
+const writeTextFile = async (targetPath, payload) => {
+  await ensureDir(path.dirname(targetPath));
+  await fsPromises.writeFile(targetPath, String(payload || ''), 'utf8');
+  return targetPath;
+};
+
 const copyFile = async (sourcePath, targetPath) => {
   await ensureDir(path.dirname(targetPath));
   await fsPromises.copyFile(sourcePath, targetPath);
+  return targetPath;
+};
+
+const moveFile = async (sourcePath, targetPath) => {
+  await ensureDir(path.dirname(targetPath));
+
+  try {
+    await fsPromises.rename(sourcePath, targetPath);
+  } catch (error) {
+    if (error && error.code === 'EXDEV') {
+      await fsPromises.copyFile(sourcePath, targetPath);
+      await fsPromises.unlink(sourcePath);
+    } else {
+      throw error;
+    }
+  }
+
   return targetPath;
 };
 
@@ -80,13 +103,24 @@ const readJsonFile = async (targetPath) => {
   return JSON.parse(raw);
 };
 
+const removeFile = async (targetPath) => {
+  try {
+    await fsPromises.unlink(targetPath);
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+};
+
 module.exports = {
   SUPPORTED_IMAGE_EXTENSIONS,
   copyFile,
   ensureDir,
   listImageFiles,
+  moveFile,
   pathExists,
   readJsonFile,
+  removeFile,
   toSafeFileStem,
   writeJsonFile,
+  writeTextFile,
 };
