@@ -1,26 +1,56 @@
 # Receipt WhatsApp Bot
 
-Bot incremental em Node.js para leitura de canhotos enviados no WhatsApp, com foco em:
+Pipeline incremental em Node.js para leitura de canhotos com arquitetura preparada para:
 
-- validar se a imagem traz os campos minimos do canhoto
-- extrair automaticamente o numero da NF-e
-- classificar a imagem como `valid`, `review` ou `invalid`
-- deixar pronta a integracao com WhatsApp e com a base da MAR E RIO
+- aceitar imagens vindas de WhatsApp, app mobile, painel web, API e upload manual
+- suportar multiplas empresas sem hardcode no core
+- processar canhotos de forma assincrona via storage + fila + worker
+- usar `Opção A` como motor principal de OCR e `Opção B` como resgate
+- manter o pipeline legado convivendo durante a migracao
 
 ## Etapas implementadas
 
-O projeto agora cobre as etapas 1 a 10 pedidas:
+O projeto agora cobre duas camadas em paralelo:
 
-1. base do projeto, scripts, `.env`, logs e runner local
-2. preprocessamento robusto e geracao de variantes
-3. OCR completo da imagem inteira, comparando variantes
-4. deteccao flexivel dos campos obrigatorios
-5. extracao da NF por heuristicas e OCR por regiao
-6. classificacao final da imagem
-7. lote local com relatorio consolidado
-8. camada pronta para entrada de mensagens do WhatsApp
-9. camada pronta para integracao futura com a API
-10. testes unitarios basicos e organizacao do codigo
+1. Pipeline legado
+   - preprocessamento, OCR local com Tesseract, heuristicas de template e classificacao atual
+2. Pipeline novo
+   - endpoint central de ingestao
+   - perfis de `sourceProfile`, `companyProfile` e `documentProfile`
+   - storage local
+   - fila local baseada em arquivos
+   - worker assincrono
+   - orquestrador de providers com `Opção A -> fallback B -> legado`
+
+## Arquitetura nova
+
+Fluxo principal:
+
+1. `POST /v1/receipts/ingest` recebe o canhoto em payload canonico
+2. o sistema identifica `companyId`, `source` e `documentType`
+3. a imagem vai para storage local temporario/persistente
+4. um job e criado na fila
+5. o worker consome o job
+6. o worker executa `Opção A` primeiro
+7. se faltar campo ou a confianca vier baixa, executa `Opção B`
+8. se ainda assim nao fechar, pode cair no provider legado durante a migracao
+9. o resultado final separa parsing, validacao, decisao e resposta operacional
+
+Payload canonico interno:
+
+```json
+{
+  "companyId": "mar-e-rio",
+  "source": "whatsapp",
+  "documentType": "delivery_receipt",
+  "imageUrl": "https://...",
+  "metadata": {
+    "groupId": "...",
+    "messageId": "...",
+    "sender": "..."
+  }
+}
+```
 
 ## Estrutura
 
@@ -31,15 +61,27 @@ apps/receipt-whatsapp-bot/
   src/
     config/
       env.js
+      profiles/
+        companies/
+        documents/
+        sources/
     services/
       api.service.js
+      extraction/
+        providers/
+      ingestion/
       imagePreprocess.service.js
       nfExtractor.service.js
       ocr.service.js
+      processing/
+      queue/
       receiptAnalysis.service.js
       receiptClassifier.service.js
       receiptDetector.service.js
+      worker/
       whatsapp.service.js
+    http/
+      routes/
     tests/
       localImageRunner.js
       runUnitTests.js
@@ -51,6 +93,7 @@ apps/receipt-whatsapp-bot/
       regex.js
       textNormalization.js
     index.js
+    worker.js
     server.js
   test-images/
   outputs/
@@ -62,9 +105,9 @@ apps/receipt-whatsapp-bot/
 ## Dependencias escolhidas
 
 - `dotenv`: configuracao simples por ambiente.
-- `express`: servidor HTTP para debug e laboratorio visual local.
+- `express`: API central de ingestao, debug e laboratorio visual local.
 - `jimp`: preprocessamento de imagem em JavaScript puro, sem exigir binarios nativos.
-- `multer`: upload em memoria para imagens enviadas na interface local.
+- `multer`: upload em disco para ingestao e laboratorio local, evitando concentrar imagem em RAM.
 - `sharp`: geracao rapida das versoes visuais de preprocessamento para comparacao lado a lado.
 - `exif-parser`: leitura leve de EXIF para tentar corrigir orientacao.
 - `tesseract.js`: OCR em Node.js, usado como motor base da leitura estruturada por orientacao, OCR global de apoio e OCR por regioes.
@@ -73,6 +116,7 @@ Observacao:
 
 - O projeto usa `langPath` apontando para a raiz do app, entao `eng.traineddata` e `por.traineddata` podem ser reaproveitados localmente.
 - O OCR principal continua usando o pipeline atual em `Jimp`; `sharp` entrou para o laboratorio visual de preprocessamento.
+- A arquitetura nova ja deixa o OCR desacoplado em providers, permitindo trocar o motor sem reescrever a regra de negocio.
 
 ## Regras de negocio cobertas
 
@@ -134,6 +178,15 @@ Variaveis principais:
 
 - `TEST_IMAGES_DIR`: pasta com imagens para testes locais
 - `OUTPUTS_DIR`: pasta de saida
+- `RECEIPT_API_PORT`: porta da API central
+- `RECEIPT_STORAGE_DIR`: onde as imagens ingeridas ficam armazenadas
+- `RECEIPT_QUEUE_DIR`: onde a fila baseada em arquivos persiste os jobs
+- `RECEIPT_COMPANY_INGEST_TOKENS`: mapa JSON de tokens por empresa
+- `RECEIPT_DEFAULT_COMPANY_ID`: empresa padrao do endpoint central
+- `RECEIPT_DEFAULT_SOURCE_ID`: origem padrao do endpoint central
+- `RECEIPT_DEFAULT_DOCUMENT_TYPE`: documento padrao do endpoint central
+- `RECEIPT_PROVIDER_GOOGLE_VISION_*`: configuracao do provider principal da `Opção A`
+- `RECEIPT_PROVIDER_OPENAI_*`: configuracao do fallback `Opção B`
 - `OCR_PROBE_LANG`: idioma leve para triagem inicial
 - `OCR_PROBE_VARIANT_LIMIT`: quantas variantes entram na triagem inicial
 - `OCR_FULL_LANG`: idioma do OCR completo
@@ -142,6 +195,7 @@ Variaveis principais:
 - `OCR_REGION_MIN_EDGE`: menor lado alvo para ampliar recortes pequenos da caixa da NF antes do OCR
 - `OCR_NF_EXPECTED_LENGTHS`: tamanhos aceitos para a NF. No fluxo atual da MAR E RIO, use `7`
 - `OCR_SUPPRESS_CONSOLE_NOISE`: remove o ruido verboso do Tesseract no terminal
+- `RECEIPT_PROFILE_ID`: perfil ativo do canhoto. O projeto sai com `mar_e_rio`, mas a arquitetura agora permite adicionar outros perfis por empresa
 - `RECEIPT_INVOICE_LOOKUP_MODE`: `auto`, `backend_db`, `mock` ou `disabled`
 - `RECEIPT_INVOICE_LOOKUP_COMPANY_CODE`: empresa consultada no banco, por padrao `mar_e_rio`
 - `RECEIPT_LOCAL_FAST_MODE`: ativa o fluxo rapido no `test:local`
@@ -211,6 +265,77 @@ Ele permite:
 - visualizar lado a lado a imagem original redimensionada
 - comparar as versoes em escala de cinza, contraste normalizado e binarizacao com nitidez
 - validar rapidamente se o preprocessamento esta ajudando ou piorando a legibilidade antes do OCR completo
+
+### 8. Rodar a API central de ingestao
+
+```bash
+npm run api
+```
+
+API padrao:
+
+- `http://localhost:3390/health`
+- `POST /v1/receipts/ingest`
+- `POST /v1/sources/whatsapp/receipts`
+- `GET /v1/receipts/jobs/:jobId`
+
+### 9. Rodar o worker
+
+```bash
+npm run worker
+```
+
+Para consumir um unico job e sair:
+
+```bash
+npm run worker:once
+```
+
+## Perfis configuraveis
+
+O core novo separa:
+
+- `sourceProfile`: origem da imagem
+- `companyProfile`: empresa e politica operacional
+- `documentProfile`: regras do documento
+
+Hoje ja existem perfis base para:
+
+- `whatsapp`
+- `api`
+- `manual_upload`
+- `web_panel`
+- `mobile_app`
+- empresa `mar-e-rio`
+- documento `delivery_receipt`
+
+Para adicionar uma nova empresa:
+
+1. crie um arquivo em `src/config/profiles/companies/`
+2. habilite as origens aceitas
+3. configure o binding do documento
+4. sobrescreva aliases, thresholds e politicas operacionais quando necessario
+
+Para adicionar uma nova origem:
+
+1. crie um arquivo em `src/config/profiles/sources/`
+2. defina os metadados esperados
+3. conecte a origem a um adapter fino que converta para o payload canonico
+4. encaminhe tudo para `POST /v1/receipts/ingest`
+
+## Providers de extracao
+
+Ordem atual de execucao por padrao:
+
+1. `google_vision_document_text`
+2. `openai_receipt_rescue`
+3. `legacy_receipt_analysis`
+
+Papel de cada um:
+
+- `Opção A`: OCR principal com resposta estruturada e regioes
+- `Opção B`: resgate multimodal quando o principal falhar ou vier fraco
+- `Legado`: convivencia temporaria para migracao segura
 
 ## O que o runner local faz
 
@@ -319,7 +444,7 @@ O objetivo dessa tela nao e classificar o canhoto, e sim dar comparacao visual r
   },
   "requiredFields": {
     "dataRecebimento": { "found": true, "confidence": 0.84 },
-    "recebemosDeMarERio": { "found": true, "confidence": 0.79 },
+    "issuerHeader": { "found": true, "confidence": 0.79 },
     "nfe": { "found": true, "confidence": 0.98 }
   },
   "nfExtraction": {
@@ -384,6 +509,9 @@ Os testes unitarios cobrem:
 - classificacao final da imagem
 - validacao por NF existente no banco
 - deteccao de assinatura na area central
+- resolucao de perfis do pipeline novo
+- parsing canonicamente desacoplado do provider
+- fila local baseada em arquivos
 
 Arquivos:
 
@@ -391,18 +519,22 @@ Arquivos:
 - [receiptDetector.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/receiptDetector.test.js)
 - [nfExtractor.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/nfExtractor.test.js)
 - [receiptClassifier.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/receiptClassifier.test.js)
+- [profileResolver.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/profileResolver.test.js)
+- [fileJobQueue.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/fileJobQueue.test.js)
+- [documentFieldParser.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/documentFieldParser.test.js)
 
-## Integracao futura com WhatsApp
+## Integracao com WhatsApp
 
 O servico [whatsapp.service.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/services/whatsapp.service.js) ja deixa preparado:
 
 - ponto de entrada para mensagem com imagem
 - funcao para baixar midia via injecao de dependencias
 - regra de resposta apenas quando a imagem nao puder ser confiavelmente analisada
+- modo assincrono opcional via `RECEIPT_ASYNC_WHATSAPP_MODE=true`, que apenas enfileira a imagem no pipeline central
 
 Ainda nao existe integracao real com WhatsApp Web nesta etapa.
 
-## Integracao futura com API
+## Integracao com API
 
 O servico [api.service.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/services/api.service.js) ja expone:
 
@@ -416,3 +548,13 @@ Hoje o servico suporta:
 - `mock`, para desenvolvimento local puro
 - `backend_db`, consultando diretamente a base do backend
 - `auto`, tentando `backend_db` primeiro e caindo para `mock` se necessario
+
+## Migracao segura do legado
+
+O projeto nao trocou tudo de uma vez. A estrategia atual e:
+
+1. manter o pipeline legado intacto
+2. isolar o legado como `legacy_receipt_analysis`
+3. colocar o pipeline novo na frente com providers configuraveis
+4. permitir fallback para o legado por empresa e documento
+5. migrar empresa por empresa sem quebrar o que ja funciona
