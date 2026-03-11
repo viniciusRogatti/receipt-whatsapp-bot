@@ -4,7 +4,8 @@ const multer = require('multer');
 const path = require('path');
 const env = require('../../config/env');
 const ingestionService = require('../../services/ingestion/receiptIngestion.service');
-const queueService = require('../../services/queue/fileJobQueue.service');
+const jobQueueService = require('../../services/queue/jobQueue.service');
+const processingStateRepository = require('../../services/state/processingStateRepository.service');
 const { ensureDir } = require('../../utils/file');
 
 const parseMetadataField = (metadata) => {
@@ -95,14 +96,18 @@ const createRouter = () => {
   });
 
   router.get('/receipts/jobs/:jobId', async (req, res) => {
-    const job = await queueService.getJob(req.params.jobId);
+    const job = await processingStateRepository.getJob(req.params.jobId);
     if (!job) {
       return res.status(404).json({
         error: 'Job nao encontrado.',
       });
     }
 
-    return res.json(job);
+    const queueMetadata = await jobQueueService.getJob(req.params.jobId).catch(() => null);
+
+    return res.json(Object.assign({}, job, queueMetadata ? {
+      queueMetadata,
+    } : {}));
   });
 
   return router;

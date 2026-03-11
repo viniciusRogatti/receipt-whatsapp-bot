@@ -1,39 +1,51 @@
 const extractionOrchestrator = require('../extraction/documentExtractionOrchestrator.service');
+const assetStorageService = require('../ingestion/receiptAssetStorage.service');
 const profileResolver = require('./profileResolver.service');
 
 module.exports = {
-  async processCanonicalRequest({ canonicalRequest, asset }) {
+  async processCanonicalRequest({ canonicalRequest, asset, jobContext = {} }) {
     const context = profileResolver.resolveReceiptProcessingContext(canonicalRequest);
-    const extraction = await extractionOrchestrator.extract({
-      imagePath: asset.filePath,
-      context,
+    const materializedAsset = await assetStorageService.materializeAssetForProcessing(asset, {
+      jobId: jobContext.jobId,
+      correlationId: jobContext.correlationId,
     });
 
-    return {
-      request: canonicalRequest,
-      asset,
-      context: {
-        companyProfile: context.companyProfile,
-        sourceProfile: context.sourceProfile,
-        documentProfile: {
-          id: context.documentProfile.id,
-          label: context.documentProfile.label,
-          documentType: context.documentProfile.documentType,
-          extractionStrategy: context.documentProfile.extractionStrategy,
-          validation: context.documentProfile.validation,
+    try {
+      const extraction = await extractionOrchestrator.extract({
+        imagePath: materializedAsset.filePath,
+        context,
+      });
+
+      return {
+        request: canonicalRequest,
+        asset,
+        context: {
+          companyProfile: context.companyProfile,
+          sourceProfile: context.sourceProfile,
+          documentProfile: {
+            id: context.documentProfile.id,
+            label: context.documentProfile.label,
+            documentType: context.documentProfile.documentType,
+            extractionStrategy: context.documentProfile.extractionStrategy,
+            validation: context.documentProfile.validation,
+          },
         },
-      },
-      extraction: {
-        providerId: extraction.selectedAttempt.providerId,
-        parsedDocument: extraction.selectedAttempt.parsedDocument || null,
-        attempts: extraction.attempts.map((attempt) => ({
-          providerId: attempt.providerId,
-          status: attempt.status,
-          reason: attempt.reason || null,
-        })),
-      },
-      decision: extraction.decision,
-      completedAt: new Date().toISOString(),
-    };
+        extraction: {
+          providerId: extraction.selectedAttempt.providerId,
+          parsedDocument: extraction.selectedAttempt.parsedDocument || null,
+          attempts: extraction.attempts.map((attempt) => ({
+            providerId: attempt.providerId,
+            status: attempt.status,
+            reason: attempt.reason || null,
+          })),
+        },
+        decision: extraction.decision,
+        completedAt: new Date().toISOString(),
+      };
+    } finally {
+      if (materializedAsset && typeof materializedAsset.cleanup === 'function') {
+        await materializedAsset.cleanup().catch(() => undefined);
+      }
+    }
   },
 };

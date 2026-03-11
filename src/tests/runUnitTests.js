@@ -14,6 +14,8 @@ const testModules = [
   require('./unit/profileResolver.test'),
   require('./unit/fileJobQueue.test'),
   require('./unit/documentFieldParser.test'),
+  require('./unit/processingStateRepository.test'),
+  require('./unit/receiptAssetStorage.test'),
 ];
 
 async function main() {

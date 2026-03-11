@@ -11,6 +11,7 @@
     "api": "node src/http/server.js",
     "worker": "node src/worker.js",
     "worker:once": "node src/worker.js --once",
+    "maintenance:once": "node src/maintenance.js",
     "debug:ui": "node src/debug-server/server.js",
     "test": "node src/tests/runUnitTests.js",
     "test:local": "node src/tests/localImageRunner.js",
@@ -20,9 +21,13 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.888.0",
+    "@aws-sdk/s3-request-presigner": "^3.888.0",
+    "bullmq": "^5.58.0",
     "dotenv": "^16.4.5",
     "exif-parser": "^0.1.12",
     "express": "^4.22.1",
+    "ioredis": "^5.7.0",
     "jimp": "^0.16.13",
     "multer": "^2.1.1",
     "sharp": "^0.34.5",

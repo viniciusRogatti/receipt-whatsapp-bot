@@ -36,6 +36,12 @@ const parseBoolean = (rawValue, fallback = false) => {
   return fallback;
 };
 
+const parseInteger = (rawValue, fallback = 0) => {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.trunc(parsed);
+};
+
 const parseJsonObject = (rawValue, fallback = {}) => {
   if (!rawValue) return Object.assign({}, fallback);
 
@@ -64,11 +70,55 @@ const env = {
   outputsDir: resolvePath(process.env.OUTPUTS_DIR, './outputs'),
   debugSessionsDir: resolvePath(process.env.DEBUG_SESSIONS_DIR, './outputs/debug-sessions'),
   receiptIngressTmpDir: resolvePath(process.env.RECEIPT_INGEST_TMP_DIR, './outputs/ingest-tmp'),
+  receiptProcessingTmpDir: resolvePath(process.env.RECEIPT_PROCESSING_TMP_DIR, './outputs/processing-tmp'),
   receiptStorageDir: resolvePath(process.env.RECEIPT_STORAGE_DIR, './outputs/receipt-storage'),
   receiptQueueDir: resolvePath(process.env.RECEIPT_QUEUE_DIR, './outputs/receipt-queue'),
+  receiptStateDir: resolvePath(process.env.RECEIPT_STATE_DIR, './outputs/processing-state'),
   debugServerPort: Number(process.env.DEBUG_SERVER_PORT || 3388),
   receiptApiPort: Number(process.env.RECEIPT_API_PORT || 3390),
   receiptWorkerPollMs: Math.max(250, Number(process.env.RECEIPT_WORKER_POLL_MS || 1500)),
+  receiptQueueOnceIdleMs: Math.max(1000, Number(process.env.RECEIPT_QUEUE_ONCE_IDLE_MS || 3000)),
+  receiptQueueConcurrency: Math.max(1, Number(process.env.RECEIPT_QUEUE_CONCURRENCY || 1)),
+  receiptQueueName: String(process.env.RECEIPT_QUEUE_NAME || 'receipt_ingest').trim(),
+  receiptJobQueueDriver: String(process.env.RECEIPT_JOB_QUEUE_DRIVER || 'file').trim().toLowerCase(),
+  receiptQueueMaxAttempts: Math.max(1, Number(process.env.RECEIPT_QUEUE_MAX_ATTEMPTS || 3)),
+  receiptQueueBackoffMs: Math.max(1000, Number(process.env.RECEIPT_QUEUE_BACKOFF_MS || 5000)),
+  receiptQueueTerminalTtlHours: Math.max(1, Number(process.env.RECEIPT_QUEUE_TERMINAL_TTL_HOURS || 168)),
+  receiptQueueRemoveOnCompleteAgeSeconds: Math.max(
+    60,
+    Number(process.env.RECEIPT_QUEUE_REMOVE_ON_COMPLETE_AGE_SECONDS || 86400),
+  ),
+  receiptQueueRemoveOnCompleteCount: Math.max(
+    1,
+    Number(process.env.RECEIPT_QUEUE_REMOVE_ON_COMPLETE_COUNT || 1000),
+  ),
+  receiptQueueRemoveOnFailAgeSeconds: Math.max(
+    60,
+    Number(process.env.RECEIPT_QUEUE_REMOVE_ON_FAIL_AGE_SECONDS || 604800),
+  ),
+  receiptQueueRemoveOnFailCount: Math.max(
+    1,
+    Number(process.env.RECEIPT_QUEUE_REMOVE_ON_FAIL_COUNT || 1000),
+  ),
+  receiptAssetStorageDriver: String(process.env.RECEIPT_ASSET_STORAGE_DRIVER || 'local').trim().toLowerCase(),
+  receiptProcessingStateRepositoryDriver: String(
+    process.env.RECEIPT_PROCESSING_STATE_REPOSITORY_DRIVER || 'file',
+  ).trim().toLowerCase(),
+  receiptStateTtlHours: Math.max(1, Number(process.env.RECEIPT_STATE_TTL_HOURS || 168)),
+  receiptAssetRetentionHours: Math.max(1, Number(process.env.RECEIPT_ASSET_RETENTION_HOURS || 168)),
+  receiptTempTtlHours: Math.max(1, Number(process.env.RECEIPT_TEMP_TTL_HOURS || 24)),
+  receiptMaintenanceIntervalMs: Math.max(10_000, Number(process.env.RECEIPT_MAINTENANCE_INTERVAL_MS || 60_000)),
+  receiptRedisUrl: String(process.env.RECEIPT_REDIS_URL || '').trim(),
+  receiptRedisPrefix: String(process.env.RECEIPT_REDIS_PREFIX || 'receipt-whatsapp-bot').trim(),
+  receiptS3Bucket: String(process.env.RECEIPT_S3_BUCKET || '').trim(),
+  receiptS3Region: String(process.env.RECEIPT_S3_REGION || process.env.AWS_REGION || 'us-east-1').trim(),
+  receiptS3Endpoint: String(process.env.RECEIPT_S3_ENDPOINT || '').trim(),
+  receiptS3ForcePathStyle: parseBoolean(process.env.RECEIPT_S3_FORCE_PATH_STYLE, false),
+  receiptS3PublicBaseUrl: String(process.env.RECEIPT_S3_PUBLIC_BASE_URL || '').trim(),
+  receiptS3SignedUrlExpiresSeconds: Math.max(
+    60,
+    Number(process.env.RECEIPT_S3_SIGNED_URL_EXPIRES_SECONDS || 900),
+  ),
   receiptAsyncWhatsappMode: parseBoolean(process.env.RECEIPT_ASYNC_WHATSAPP_MODE, false),
   receiptDefaultCompanyId: String(process.env.RECEIPT_DEFAULT_COMPANY_ID || DEFAULT_COMPANY_ID).trim(),
   receiptDefaultSourceId: String(process.env.RECEIPT_DEFAULT_SOURCE_ID || DEFAULT_SOURCE_ID).trim(),
