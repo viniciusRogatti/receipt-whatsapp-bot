@@ -17,8 +17,8 @@ O projeto agora cobre duas camadas em paralelo:
 2. Pipeline novo
    - endpoint central de ingestao
    - perfis de `sourceProfile`, `companyProfile` e `documentProfile`
-   - storage local
-   - fila local baseada em arquivos
+   - interfaces de storage, fila e state repository
+   - drivers locais e cloud-ready
    - worker assincrono
    - orquestrador de providers com `Opção A -> fallback B -> legado`
 
@@ -28,13 +28,14 @@ Fluxo principal:
 
 1. `POST /v1/receipts/ingest` recebe o canhoto em payload canonico
 2. o sistema identifica `companyId`, `source` e `documentType`
-3. a imagem vai para storage local temporario/persistente
-4. um job e criado na fila
+3. a imagem vai para o `AssetStorage` ativo
+4. um job e criado no `JobQueue` ativo
 5. o worker consome o job
 6. o worker executa `Opção A` primeiro
 7. se faltar campo ou a confianca vier baixa, executa `Opção B`
 8. se ainda assim nao fechar, pode cair no provider legado durante a migracao
-9. o resultado final separa parsing, validacao, decisao e resposta operacional
+9. o `ProcessingStateRepository` consolida status, tentativas e resultado final
+10. o resultado final separa parsing, validacao, decisao e resposta operacional
 
 Payload canonico interno:
 
@@ -69,8 +70,10 @@ apps/receipt-whatsapp-bot/
       api.service.js
       extraction/
         providers/
+      infrastructure/
       ingestion/
       imagePreprocess.service.js
+      maintenance/
       nfExtractor.service.js
       ocr.service.js
       processing/
@@ -78,6 +81,7 @@ apps/receipt-whatsapp-bot/
       receiptAnalysis.service.js
       receiptClassifier.service.js
       receiptDetector.service.js
+      state/
       worker/
       whatsapp.service.js
     http/
@@ -93,6 +97,7 @@ apps/receipt-whatsapp-bot/
       regex.js
       textNormalization.js
     index.js
+    maintenance.js
     worker.js
     server.js
   test-images/
@@ -111,12 +116,43 @@ apps/receipt-whatsapp-bot/
 - `sharp`: geracao rapida das versoes visuais de preprocessamento para comparacao lado a lado.
 - `exif-parser`: leitura leve de EXIF para tentar corrigir orientacao.
 - `tesseract.js`: OCR em Node.js, usado como motor base da leitura estruturada por orientacao, OCR global de apoio e OCR por regioes.
+- `bullmq` + `ioredis`: fila profissional com Redis, retries, backoff, eventos e suporte a multiplos workers.
+- `@aws-sdk/client-s3`: storage externo para objetos, preparado para buckets S3-compatibles.
 
 Observacao:
 
 - O projeto usa `langPath` apontando para a raiz do app, entao `eng.traineddata` e `por.traineddata` podem ser reaproveitados localmente.
 - O OCR principal continua usando o pipeline atual em `Jimp`; `sharp` entrou para o laboratorio visual de preprocessamento.
 - A arquitetura nova ja deixa o OCR desacoplado em providers, permitindo trocar o motor sem reescrever a regra de negocio.
+- Fila, storage e persistencia de estado agora tambem estao desacoplados por driver, com alternancia por env.
+
+## Infraestrutura atual
+
+Interfaces ativas:
+
+- `JobQueue`
+- `AssetStorage`
+- `ProcessingStateRepository`
+
+Drivers disponiveis:
+
+- fila: `file` ou `bullmq`
+- storage: `local` ou `s3`
+- estado: `file` ou `redis`
+
+Modo de transicao recomendado:
+
+- `RECEIPT_JOB_QUEUE_DRIVER=file`
+- `RECEIPT_ASSET_STORAGE_DRIVER=local`
+- `RECEIPT_PROCESSING_STATE_REPOSITORY_DRIVER=file`
+
+Modo cloud-ready:
+
+- `RECEIPT_JOB_QUEUE_DRIVER=bullmq`
+- `RECEIPT_ASSET_STORAGE_DRIVER=s3`
+- `RECEIPT_PROCESSING_STATE_REPOSITORY_DRIVER=redis`
+
+Mesmo trocando esses drivers, o orchestrator de extracao, o decision service e o worker pattern permanecem os mesmos.
 
 ## Regras de negocio cobertas
 
@@ -179,8 +215,23 @@ Variaveis principais:
 - `TEST_IMAGES_DIR`: pasta com imagens para testes locais
 - `OUTPUTS_DIR`: pasta de saida
 - `RECEIPT_API_PORT`: porta da API central
-- `RECEIPT_STORAGE_DIR`: onde as imagens ingeridas ficam armazenadas
-- `RECEIPT_QUEUE_DIR`: onde a fila baseada em arquivos persiste os jobs
+- `RECEIPT_JOB_QUEUE_DRIVER`: `file` ou `bullmq`
+- `RECEIPT_ASSET_STORAGE_DRIVER`: `local` ou `s3`
+- `RECEIPT_PROCESSING_STATE_REPOSITORY_DRIVER`: `file` ou `redis`
+- `RECEIPT_STORAGE_DIR`: raiz do storage local quando o driver e `local`
+- `RECEIPT_QUEUE_DIR`: raiz da fila local quando o driver e `file`
+- `RECEIPT_STATE_DIR`: raiz do state repository local quando o driver e `file`
+- `RECEIPT_REDIS_URL`: conexao do Redis para BullMQ/state repository Redis
+- `RECEIPT_QUEUE_NAME`: nome logico da fila
+- `RECEIPT_QUEUE_MAX_ATTEMPTS`: tentativas maximas por job
+- `RECEIPT_QUEUE_BACKOFF_MS`: backoff base para retries
+- `RECEIPT_QUEUE_CONCURRENCY`: concorrencia do worker BullMQ
+- `RECEIPT_S3_BUCKET`: bucket do storage externo
+- `RECEIPT_S3_REGION`: regiao do bucket
+- `RECEIPT_S3_ENDPOINT`: endpoint S3-compatible opcional
+- `RECEIPT_S3_FORCE_PATH_STYLE`: compatibilidade com MinIO/R2/LocalStack
+- `RECEIPT_S3_PUBLIC_BASE_URL`: URL publica base opcional
+- `RECEIPT_MAINTENANCE_INTERVAL_MS`: janela da rotina de limpeza automatica
 - `RECEIPT_COMPANY_INGEST_TOKENS`: mapa JSON de tokens por empresa
 - `RECEIPT_DEFAULT_COMPANY_ID`: empresa padrao do endpoint central
 - `RECEIPT_DEFAULT_SOURCE_ID`: origem padrao do endpoint central
@@ -210,6 +261,7 @@ Padrao atual:
 - `OCR_FULL_MAX_EDGE` e `OCR_REGION_MAX_EDGE` ja saem reduzidos por padrao para manter o lote local responsivo.
 - `OCR_REGION_MIN_EDGE` amplia recortes pequenos da area da NF para melhorar a leitura em fotos comprimidas.
 - `RECEIPT_LOCAL_FAST_MODE=true` deixa o `test:local` em modo rapido por padrao, reduzindo rotacoes, OCR de apoio e confirmacoes extras.
+- Para cloud, use Redis gerido + bucket S3-compatível e deixe o filesystem apenas para `tmp`.
 
 ### 3. Adicionar imagens de teste
 
@@ -291,6 +343,19 @@ Para consumir um unico job e sair:
 npm run worker:once
 ```
 
+### 10. Rodar manutencao manual
+
+```bash
+npm run maintenance:once
+```
+
+Essa rotina executa:
+
+- limpeza de jobs finalizados no driver local
+- limpeza de registros antigos no state repository
+- limpeza de assets locais expirados
+- limpeza de arquivos temporarios antigos
+
 ## Perfis configuraveis
 
 O core novo separa:
@@ -336,6 +401,35 @@ Papel de cada um:
 - `Opção A`: OCR principal com resposta estruturada e regioes
 - `Opção B`: resgate multimodal quando o principal falhar ou vier fraco
 - `Legado`: convivencia temporaria para migracao segura
+
+## Fila e estado
+
+Com `BullMQ + Redis`:
+
+- o producer adiciona jobs com `attempts`, `backoff` e politica de remocao
+- o worker consome sem polling manual
+- o estado funcional do processamento continua indo para o `ProcessingStateRepository`
+- o endpoint `GET /v1/receipts/jobs/:jobId` consulta esse repositório e, quando possivel, agrega metadado da fila
+
+Com o driver `file`:
+
+- a semantica antiga continua disponivel
+- agora existe retry com backoff simples
+- o filesystem deixa de ser a fonte unica de verdade, porque o estado do job tambem e persistido separadamente
+
+## Storage de assets
+
+Com `local`:
+
+- a imagem fica em disco apenas como implementacao transitória
+- o worker processa o proprio arquivo local
+
+Com `s3`:
+
+- a imagem original sai do disco local logo na ingestao
+- o worker baixa temporariamente o objeto para processamento
+- a nomenclatura segue `companyId/documentType/ano/mes/dia/...`
+- a geracao de URL fica encapsulada no `AssetStorage`
 
 ## O que o runner local faz
 
@@ -512,6 +606,8 @@ Os testes unitarios cobrem:
 - resolucao de perfis do pipeline novo
 - parsing canonicamente desacoplado do provider
 - fila local baseada em arquivos
+- repositório de estado do processamento
+- storage local desacoplado por driver
 
 Arquivos:
 
@@ -522,6 +618,8 @@ Arquivos:
 - [profileResolver.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/profileResolver.test.js)
 - [fileJobQueue.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/fileJobQueue.test.js)
 - [documentFieldParser.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/documentFieldParser.test.js)
+- [processingStateRepository.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/processingStateRepository.test.js)
+- [receiptAssetStorage.test.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/tests/unit/receiptAssetStorage.test.js)
 
 ## Integracao com WhatsApp
 
@@ -556,5 +654,7 @@ O projeto nao trocou tudo de uma vez. A estrategia atual e:
 1. manter o pipeline legado intacto
 2. isolar o legado como `legacy_receipt_analysis`
 3. colocar o pipeline novo na frente com providers configuraveis
-4. permitir fallback para o legado por empresa e documento
-5. migrar empresa por empresa sem quebrar o que ja funciona
+4. isolar tambem fila, storage e estado atras de interfaces
+5. permitir drivers locais e cloud por configuracao
+6. permitir fallback para o legado por empresa e documento
+7. migrar empresa por empresa sem quebrar o que ja funciona
