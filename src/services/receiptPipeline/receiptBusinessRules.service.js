@@ -1,10 +1,18 @@
 const { BUSINESS_THRESHOLDS } = require('./receiptConstants');
+const receiptProfile = require('../../config/receiptProfile');
+const {
+  RECEIPT_FIELD_KEYS,
+  REQUIRED_FIELD_ORDER,
+} = require('../../config/receiptProfiles');
 
 const FIELD_WEIGHTS = {
-  dataRecebimento: 22,
-  recebemosDeMarERio: 12,
-  nfe: 24,
+  [RECEIPT_FIELD_KEYS.dataRecebimento]: 22,
+  [RECEIPT_FIELD_KEYS.issuerHeader]: 12,
+  [RECEIPT_FIELD_KEYS.nfe]: 24,
 };
+
+const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
+const companyName = receiptProfile.company.displayName;
 
 const toUnitConfidence = (value) => {
   const numeric = Number(value || 0);
@@ -16,24 +24,24 @@ const toUnitConfidence = (value) => {
 const buildConsistencyScore = ({ requiredFields = {}, nfExtraction = {} }) => {
   let score = 0;
 
-  if (requiredFields.dataRecebimento && requiredFields.dataRecebimento.found) score += 2;
-  if (requiredFields.nfe && requiredFields.nfe.found) score += 2;
+  if (requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento] && requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento].found) score += 2;
+  if (requiredFields[RECEIPT_FIELD_KEYS.nfe] && requiredFields[RECEIPT_FIELD_KEYS.nfe].found) score += 2;
   if (
-    requiredFields.dataRecebimento
-    && requiredFields.dataRecebimento.found
-    && requiredFields.nfe
-    && requiredFields.nfe.found
+    requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento]
+    && requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento].found
+    && requiredFields[RECEIPT_FIELD_KEYS.nfe]
+    && requiredFields[RECEIPT_FIELD_KEYS.nfe].found
   ) {
     score += 2;
   }
 
   if (
-    requiredFields.dataRecebimento
-    && requiredFields.dataRecebimento.found
-    && requiredFields.recebemosDeMarERio
-    && requiredFields.recebemosDeMarERio.found
-    && requiredFields.nfe
-    && requiredFields.nfe.found
+    requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento]
+    && requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento].found
+    && requiredFields[RECEIPT_FIELD_KEYS.issuerHeader]
+    && requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].found
+    && requiredFields[RECEIPT_FIELD_KEYS.nfe]
+    && requiredFields[RECEIPT_FIELD_KEYS.nfe].found
   ) {
     score += 3;
   }
@@ -68,17 +76,17 @@ module.exports = {
       : Number((Math.min(1, Number(validation.metrics && validation.metrics.geometryScore) || 0) * 8).toFixed(2));
     const consistency = buildConsistencyScore({ requiredFields, nfExtraction });
     const total = Number((
-      fieldBreakdown.dataRecebimento
-      + fieldBreakdown.recebemosDeMarERio
-      + fieldBreakdown.nfe
+      fieldBreakdown[RECEIPT_FIELD_KEYS.dataRecebimento]
+      + fieldBreakdown[RECEIPT_FIELD_KEYS.issuerHeader]
+      + fieldBreakdown[RECEIPT_FIELD_KEYS.nfe]
       + invoiceNumber
       + templateStructure
       + consistency
     ).toFixed(2));
 
-    const dataField = requiredFields.dataRecebimento || {};
-    const recebemosField = requiredFields.recebemosDeMarERio || {};
-    const nfeField = requiredFields.nfe || {};
+    const dataField = requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento] || {};
+    const issuerHeaderField = requiredFields[RECEIPT_FIELD_KEYS.issuerHeader] || {};
+    const nfeField = requiredFields[RECEIPT_FIELD_KEYS.nfe] || {};
     const geometryScore = Number(validation && validation.metrics && validation.metrics.geometryScore) || 0;
     const invoiceConfirmedInDb = !!(invoiceLookup && invoiceLookup.found);
     const fallbackEligible = (
@@ -99,7 +107,7 @@ module.exports = {
       && Number(nfExtraction.supportCount || 0) >= 2
       && invoiceConfirmedInDb
     );
-    const allCoreFieldsDetected = !!dataField.found && !!recebemosField.found && !!nfeField.found;
+    const allCoreFieldsDetected = !!dataField.found && !!issuerHeaderField.found && !!nfeField.found;
 
     return {
       total,
@@ -108,16 +116,16 @@ module.exports = {
       allCoreFieldsDetected,
       hasStrongNf: !!(nfExtraction && nfExtraction.nf) && nfConfidence >= BUSINESS_THRESHOLDS.validNfConfidence,
       scoreBreakdown: {
-        dataRecebimento: fieldBreakdown.dataRecebimento,
-        recebemosDeMarERio: fieldBreakdown.recebemosDeMarERio,
-        nfe: fieldBreakdown.nfe,
+        [RECEIPT_FIELD_KEYS.dataRecebimento]: fieldBreakdown[RECEIPT_FIELD_KEYS.dataRecebimento],
+        [RECEIPT_FIELD_KEYS.issuerHeader]: fieldBreakdown[RECEIPT_FIELD_KEYS.issuerHeader],
+        [RECEIPT_FIELD_KEYS.nfe]: fieldBreakdown[RECEIPT_FIELD_KEYS.nfe],
         invoiceNumber,
         templateStructure,
         consistency,
         total,
       },
       metrics: {
-        detectedFieldCount: Object.keys(requiredFields).filter((fieldKey) => requiredFields[fieldKey].found).length,
+        detectedFieldCount: REQUIRED_FIELD_ORDER.filter((fieldKey) => requiredFields[fieldKey] && requiredFields[fieldKey].found).length,
         nfConfidence,
         supportCount: Number(nfExtraction.supportCount || 0),
         invoiceConfirmedInDb,
@@ -142,10 +150,10 @@ module.exports = {
     const suggestedActions = [];
     const averageFieldConfidence = score.metrics.detectedFieldCount
       ? Number((
-        Object.keys(requiredFields)
-          .map((fieldKey) => toUnitConfidence(requiredFields[fieldKey].confidence))
+        REQUIRED_FIELD_ORDER
+          .map((fieldKey) => toUnitConfidence((requiredFields[fieldKey] || {}).confidence))
           .reduce((sum, value) => sum + value, 0)
-        / Object.keys(requiredFields).length
+        / REQUIRED_FIELD_ORDER.length
       ).toFixed(2))
       : 0;
     const validationStatus = validation.status || (
@@ -178,7 +186,7 @@ module.exports = {
         reasons.push('Os tres campos estruturais foram localizados e a NF foi extraida com confianca suficiente.');
       } else {
         reasons.push('Fallback aplicado: DATA DE RECEBIMENTO e NF-e estavam legiveis, com NF extraida de forma confiavel.');
-        reasons.push('RECEBEMOS DA MAR E RIO ficou parcial ou encoberto, mas a estrutura restante sustentou a aprovacao.');
+        reasons.push(`${issuerHeaderLabel} ficou parcial ou encoberto, mas a estrutura restante sustentou a aprovacao.`);
       }
 
       suggestedActions.push('seguir_para_integracao_api');
@@ -189,7 +197,7 @@ module.exports = {
       && validationStatus !== 'invalid'
     ) {
       classification = 'valid';
-      reasons.push('RECEBEMOS DE MAR E RIO ficou parcial ou encoberto, mas a NF extraida existe na base da MAR E RIO.');
+      reasons.push(`${issuerHeaderLabel} ficou parcial ou encoberto, mas a NF extraida existe na base de ${companyName}.`);
       reasons.push('A origem do canhoto foi confirmada pela consulta da NF no banco, mantendo DATA DE RECEBIMENTO e NF-e como ancoras estruturais.');
       suggestedActions.push('seguir_para_integracao_api');
     } else if (
@@ -210,8 +218,8 @@ module.exports = {
         reasons.push('Ha indicios estruturais bons, mas falta confianca para aprovar automaticamente o canhoto.');
       }
 
-      if (!(requiredFields.recebemosDeMarERio && requiredFields.recebemosDeMarERio.found)) {
-        reasons.push('O campo RECEBEMOS DA MAR E RIO nao ficou legivel o bastante para fechar a aprovacao automatica.');
+      if (!(requiredFields[RECEIPT_FIELD_KEYS.issuerHeader] && requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].found)) {
+        reasons.push(`O campo ${issuerHeaderLabel} nao ficou legivel o bastante para fechar a aprovacao automatica.`);
       }
 
       suggestedActions.push('revisar_manual');
@@ -223,11 +231,11 @@ module.exports = {
       suggestedActions.push('responder_no_whatsapp');
     }
 
-    if (!(requiredFields.dataRecebimento && requiredFields.dataRecebimento.found)) {
+    if (!(requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento] && requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento].found)) {
       reasons.push('DATA DE RECEBIMENTO nao foi localizada com seguranca.');
     }
 
-    if (!(requiredFields.nfe && requiredFields.nfe.found)) {
+    if (!(requiredFields[RECEIPT_FIELD_KEYS.nfe] && requiredFields[RECEIPT_FIELD_KEYS.nfe].found)) {
       reasons.push('Campo NF-e nao foi localizado com seguranca.');
     }
 
@@ -242,9 +250,9 @@ module.exports = {
     }
 
     if (databaseLookupUsedForOrigin) {
-      reasons.push('A consulta no banco confirmou que a NF pertence a MAR E RIO, mesmo com o cabecalho parcialmente coberto.');
+      reasons.push(`A consulta no banco confirmou que a NF pertence a ${companyName}, mesmo com o cabecalho parcialmente coberto.`);
     } else if (invoiceLookup && invoiceLookup.reason === 'invoice_not_found' && nfExtraction && nfExtraction.nf) {
-      reasons.push('A NF extraida nao foi encontrada na base da MAR E RIO para servir como confirmacao adicional.');
+      reasons.push(`A NF extraida nao foi encontrada na base de ${companyName} para servir como confirmacao adicional.`);
     }
 
     return {

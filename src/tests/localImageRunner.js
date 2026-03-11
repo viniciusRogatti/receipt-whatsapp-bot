@@ -131,6 +131,7 @@ async function main() {
       const nfMatchesExpected = expectedNf ? detectedNf === expectedNf : !!detectedNf;
 
       const result = buildImageResult(imagePath, {
+        receiptProfile: analysis.receiptProfile || null,
         classification: analysis.classification,
         analysisMode,
         validation: analysis.validation,

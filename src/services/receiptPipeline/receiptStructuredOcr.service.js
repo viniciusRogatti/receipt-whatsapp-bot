@@ -1,5 +1,8 @@
 const path = require('path');
 const env = require('../../config/env');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../../config/receiptProfiles');
 const ocrService = require('../ocr.service');
 const receiptRoiOcrService = require('./receiptRoiOcr.service');
 const {
@@ -59,7 +62,11 @@ const buildGlobalTargets = ({ preprocess, orientationId }) => {
           orientationId,
           regionId: 'global_support',
           regionLabel: 'Documento alinhado mascarado',
-          fieldKeys: ['dataRecebimento', 'recebemosDeMarERio', 'nfe'],
+          fieldKeys: [
+            RECEIPT_FIELD_KEYS.dataRecebimento,
+            RECEIPT_FIELD_KEYS.issuerHeader,
+            RECEIPT_FIELD_KEYS.nfe,
+          ],
           sourceVariantId: variant.id,
           variantProfileId: variant.profileId,
           targetRole: step.targetRole,

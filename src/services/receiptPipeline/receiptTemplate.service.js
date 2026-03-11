@@ -1,5 +1,8 @@
 const Jimp = require('jimp');
 const {
+  RECEIPT_FIELD_KEYS,
+} = require('../../config/receiptProfiles');
+const {
   RECEIPT_TEMPLATE,
   TEMPLATE_ROI_DEFINITIONS,
 } = require('./receiptConstants');
@@ -1424,9 +1427,9 @@ module.exports = {
   assessSignaturePresence,
 
   scoreTemplateMatch({ contour = {}, requiredFields = {}, nfBlockDetected = false }) {
-    const headerConfidence = Number((requiredFields.recebemosDeMarERio && requiredFields.recebemosDeMarERio.confidence) || 0);
-    const dateConfidence = Number((requiredFields.dataRecebimento && requiredFields.dataRecebimento.confidence) || 0);
-    const nfConfidence = Number((requiredFields.nfe && requiredFields.nfe.confidence) || 0);
+    const headerConfidence = Number((requiredFields[RECEIPT_FIELD_KEYS.issuerHeader] && requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].confidence) || 0);
+    const dateConfidence = Number((requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento] && requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento].confidence) || 0);
+    const nfConfidence = Number((requiredFields[RECEIPT_FIELD_KEYS.nfe] && requiredFields[RECEIPT_FIELD_KEYS.nfe].confidence) || 0);
     const geometryScore = Number(contour.geometryScore || 0);
     const total = Number((
       (geometryScore * 38)

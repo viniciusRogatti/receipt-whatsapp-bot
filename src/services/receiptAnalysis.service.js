@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 const Jimp = require('jimp');
+const receiptProfile = require('../config/receiptProfile');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../config/receiptProfiles');
 const imagePreprocessService = require('./imagePreprocess.service');
 const receiptDetectorService = require('./receiptDetector.service');
 const nfExtractorService = require('./nfExtractor.service');
@@ -12,11 +16,14 @@ const receiptStructuredOcrService = require('./receiptPipeline/receiptStructured
 const receiptValidationService = require('./receiptPipeline/receiptValidation.service');
 const receiptTemplateService = require('./receiptPipeline/receiptTemplate.service');
 const {
+  BUSINESS_THRESHOLDS,
   NF_ROI_DEFINITIONS,
   RECEIPT_TEMPLATE,
 } = require('./receiptPipeline/receiptConstants');
 
 const NF_BLOCK_DEFINITION = NF_ROI_DEFINITIONS.find((definition) => definition.id === 'nf_block') || null;
+const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
+const companyName = receiptProfile.company.displayName;
 const NF_BLOCK_RESCUE_CROPS = [
   {
     id: 'nf_block_clean_rescue_full',
@@ -206,7 +213,54 @@ const buildTightFuzzyDbNeighbors = (candidate) => {
     }
   });
 
+  const candidateConfidence = Number(candidate && candidate.confidence || 0);
+  const hasContext = !!(
+    candidate
+    && candidate.context
+    && (candidate.context.foundNfe || candidate.context.foundNumeroMarker)
+  );
+
+  // OCR fraco em ROI curta costuma inverter dois digitos adjacentes.
+  if (digits.length >= 2 && candidateConfidence < BUSINESS_THRESHOLDS.validNfConfidence && !hasContext) {
+    for (let index = 0; index < digits.length - 1; index += 1) {
+      if (digits[index] === digits[index + 1]) continue;
+      neighbors.add(
+        digits.slice(0, index)
+        + digits[index + 1]
+        + digits[index]
+        + digits.slice(index + 2),
+      );
+    }
+  }
+
   return Array.from(neighbors);
+};
+
+const hasRescueFriendlyVariant = (candidate) => (
+  Array.isArray(candidate && candidate.supportingVariants)
+  && candidate.supportingVariants.some((variantId) => (
+    String(variantId).indexOf('ink_clean_rescue') >= 0
+    || String(variantId).indexOf('document_ink_clean') >= 0
+  ))
+);
+
+const isEligibleForFuzzyDbRescue = (candidate, bestConfidence = 0) => {
+  const confidence = Number(candidate && candidate.confidence || 0);
+  if (confidence < Math.max(0.35, bestConfidence - 0.15)) return false;
+
+  const sourceTypes = Array.isArray(candidate && candidate.sourceTypes)
+    ? candidate.sourceTypes
+    : [];
+  const isRoiCandidate = (
+    (candidate && candidate.origin === 'roi')
+    || sourceTypes.some((sourceType) => String(sourceType).indexOf('nf_roi') >= 0)
+  );
+  if (!isRoiCandidate) return false;
+
+  if (hasRescueFriendlyVariant(candidate)) return true;
+
+  const context = candidate && candidate.context ? candidate.context : null;
+  return !!(context && !context.foundNfe && !context.foundNumeroMarker);
 };
 
 const hasCompetingStrongCandidate = (nfExtraction = {}) => {
@@ -225,13 +279,11 @@ const hasCompetingStrongCandidate = (nfExtraction = {}) => {
 };
 
 const resolveFuzzyDbRescue = async (candidates = []) => {
+  const bestConfidence = candidates.reduce((maxValue, candidate) => (
+    Math.max(maxValue, Number(candidate && candidate.confidence || 0))
+  ), 0);
   const fuzzyRescueCandidates = candidates.filter((candidate) => (
-    Array.isArray(candidate.supportingVariants)
-    && candidate.supportingVariants.some((variantId) => (
-      String(variantId).indexOf('ink_clean_rescue') >= 0
-      || String(variantId).indexOf('document_ink_clean') >= 0
-    ))
-    && Number(candidate.confidence || 0) >= 0.4
+    isEligibleForFuzzyDbRescue(candidate, bestConfidence)
   ));
   const fuzzyLookups = [];
   const seenNeighbor = new Set();
@@ -392,7 +444,7 @@ const buildFailureDiagnostics = ({
   const signaturePresent = signatureCheck && signatureCheck.evaluated
     ? !!signatureCheck.present
     : null;
-  const headerFallbackByDb = !requiredFields.recebemosDeMarERio?.found && !!invoiceLookup.found;
+  const headerFallbackByDb = !requiredFields[RECEIPT_FIELD_KEYS.issuerHeader]?.found && !!invoiceLookup.found;
   const checkpoints = [
     {
       key: 'geometry',
@@ -431,15 +483,15 @@ const buildFailureDiagnostics = ({
     },
     {
       key: 'header',
-      label: 'RECEBEMOS DE MAR E RIO',
-      status: toCheckpointStatus(!!requiredFields.recebemosDeMarERio?.found, headerFallbackByDb),
-      detail: requiredFields.recebemosDeMarERio?.found
-        ? `Cabecalho reconhecido com confianca ${requiredFields.recebemosDeMarERio.confidence}.`
+      label: issuerHeaderLabel,
+      status: toCheckpointStatus(!!requiredFields[RECEIPT_FIELD_KEYS.issuerHeader]?.found, headerFallbackByDb),
+      detail: requiredFields[RECEIPT_FIELD_KEYS.issuerHeader]?.found
+        ? `Cabecalho reconhecido com confianca ${requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].confidence}.`
         : headerFallbackByDb
-          ? 'Cabecalho coberto ou fraco, mas a NF confirmou a origem MAR E RIO no banco.'
-          : 'O cabecalho MAR E RIO nao ficou legivel o bastante para fechamento por OCR.',
+          ? `Cabecalho coberto ou fraco, mas a NF confirmou a origem ${companyName} no banco.`
+          : `O cabecalho ${issuerHeaderLabel} nao ficou legivel o bastante para fechamento por OCR.`,
       blocksAutomaticApproval: !headerFallbackByDb,
-      metrics: requiredFields.recebemosDeMarERio || null,
+      metrics: requiredFields[RECEIPT_FIELD_KEYS.issuerHeader] || null,
     },
     {
       key: 'nf_block',
@@ -521,6 +573,13 @@ const buildFailureDiagnostics = ({
 };
 
 module.exports = {
+  __testables: {
+    buildTightFuzzyDbNeighbors,
+    isEligibleForFuzzyDbRescue,
+    resolveCandidateByInvoiceLookup,
+    resolveFuzzyDbRescue,
+  },
+
   async analyzeImage({ imagePath, outputDir, onProgress = null, profile = 'batch' }) {
     const emitProgress = (payload) => {
       if (!onProgress) return;
@@ -624,7 +683,7 @@ module.exports = {
     emitProgress({
       step: 'field_detection',
       status: 'running',
-      message: 'Localizando DATA DE RECEBIMENTO, RECEBEMOS DA MAR E RIO e o campo NF-e.',
+      message: `Localizando DATA DE RECEBIMENTO, ${issuerHeaderLabel} e o campo NF-e.`,
     });
     const detection = await receiptDetectorService.detectRequiredFields({
       documents: structuredOcr.documents,
@@ -723,7 +782,7 @@ module.exports = {
       step: 'invoice_lookup',
       status: 'running',
       message: nfExtraction.nf
-        ? 'Conferindo se a NF extraida existe no banco da MAR E RIO.'
+        ? `Conferindo se a NF extraida existe no banco de ${companyName}.`
         : 'Pulando consulta ao banco porque nenhuma NF foi extraida.',
     });
     let invoiceLookup = await apiService.findInvoiceByNumber(nfExtraction.nf);
@@ -775,9 +834,9 @@ module.exports = {
       orientation: selectedOrientation ? selectedOrientation.rotation : 0,
       templateMatched: validation.templateMatched,
       fields: {
-        headerDetected: !!(detection.requiredFields.recebemosDeMarERio && detection.requiredFields.recebemosDeMarERio.found),
-        dateFieldDetected: !!(detection.requiredFields.dataRecebimento && detection.requiredFields.dataRecebimento.found),
-        nfBlockDetected: !!(detection.requiredFields.nfe && detection.requiredFields.nfe.found),
+        headerDetected: !!(detection.requiredFields[RECEIPT_FIELD_KEYS.issuerHeader] && detection.requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].found),
+        dateFieldDetected: !!(detection.requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento] && detection.requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento].found),
+        nfBlockDetected: !!(detection.requiredFields[RECEIPT_FIELD_KEYS.nfe] && detection.requiredFields[RECEIPT_FIELD_KEYS.nfe].found),
         signatureLikelyPresent: diagnostics.summary.signatureLikelyPresent,
         invoiceConfirmedInDb: diagnostics.summary.invoiceConfirmedInDb,
       },
@@ -805,6 +864,10 @@ module.exports = {
 
     return {
       status: 'stage_10_completed',
+      receiptProfile: {
+        id: receiptProfile.id,
+        company: receiptProfile.company,
+      },
       preprocess,
       ocrProbe,
       fullOcr: structuredOcr.fullOcr,

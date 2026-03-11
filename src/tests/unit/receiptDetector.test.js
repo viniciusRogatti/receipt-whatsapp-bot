@@ -1,5 +1,8 @@
 const assert = require('assert');
 const receiptDetectorService = require('../../services/receiptDetector.service');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../../config/receiptProfiles');
 
 module.exports = () => ([
   {
@@ -15,7 +18,7 @@ module.exports = () => ([
       });
 
       assert.strictEqual(result.requiredFields.dataRecebimento.found, true);
-      assert.strictEqual(result.requiredFields.recebemosDeMarERio.found, true);
+      assert.strictEqual(result.requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].found, true);
       assert.strictEqual(result.requiredFields.nfe.found, true);
     },
   },
@@ -32,7 +35,7 @@ module.exports = () => ([
       });
 
       assert.strictEqual(result.requiredFields.dataRecebimento.found, true);
-      assert.strictEqual(result.requiredFields.recebemosDeMarERio.found, true);
+      assert.strictEqual(result.requiredFields[RECEIPT_FIELD_KEYS.issuerHeader].found, true);
       assert.strictEqual(result.requiredFields.nfe.found, true);
     },
   },

@@ -1,5 +1,6 @@
 const path = require('path');
 const env = require('../config/env');
+const receiptProfile = require('../config/receiptProfile');
 const logger = require('../utils/logger');
 const receiptAnalysisService = require('./receiptAnalysis.service');
 const debugVisualizationService = require('./debugVisualization.service');
@@ -38,11 +39,14 @@ const ensureInsideRoot = (rootDir, candidatePath) => {
 };
 
 const buildSessionId = (label = 'session') => `${Date.now()}-${toSafeFileStem(label)}-${Math.random().toString(36).slice(2, 8)}`;
+const companyName = receiptProfile.company.displayName;
 
 const buildFriendlyLogs = (analysis) => {
   const logs = [];
   const requiredFields = analysis.detection.requiredFields || {};
-  const missingFields = Object.keys(requiredFields).filter((fieldKey) => !requiredFields[fieldKey].found);
+  const missingFields = Object.keys(requiredFields)
+    .filter((fieldKey) => !requiredFields[fieldKey].found)
+    .map((fieldKey) => requiredFields[fieldKey].label || fieldKey);
 
   logs.push({
     level: 'info',
@@ -55,8 +59,8 @@ const buildFriendlyLogs = (analysis) => {
   logs.push({
     level: analysis.template && analysis.template.templateMatched ? 'success' : 'warning',
     message: analysis.template && analysis.template.templateMatched
-      ? 'Template fixo da MAR E RIO confirmado na imagem alinhada.'
-      : 'Template fixo da MAR E RIO ainda esta ambiguo ou parcialmente cortado.',
+      ? `Template ${receiptProfile.template.label} confirmado na imagem alinhada.`
+      : `Template ${receiptProfile.template.label} ainda esta ambiguo ou parcialmente cortado.`,
   });
   logs.push({
     level: analysis.nfExtraction.nf ? 'success' : 'warning',
@@ -68,7 +72,7 @@ const buildFriendlyLogs = (analysis) => {
     level: analysis.invoiceLookup && analysis.invoiceLookup.found ? 'success' : 'info',
     message: analysis.invoiceLookup && analysis.invoiceLookup.found
       ? `NF confirmada no banco (${analysis.invoiceLookup.mode || 'lookup'}).`
-      : 'NF nao confirmada no banco consultado.',
+      : `NF nao confirmada no banco de ${companyName}.`,
   });
   logs.push({
     level: analysis.template && analysis.template.signatureCheck && analysis.template.signatureCheck.present ? 'success' : 'info',
@@ -209,6 +213,10 @@ module.exports = {
       analysisRef: {
         filePath: analysisJsonPath,
         url: toOutputAssetUrl(analysisJsonPath),
+      },
+      receiptProfile: analysis.receiptProfile || {
+        id: receiptProfile.id,
+        company: receiptProfile.company,
       },
       timings: analysis.timings,
       summary: {

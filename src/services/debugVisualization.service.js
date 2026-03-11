@@ -1,5 +1,6 @@
 const path = require('path');
 const Jimp = require('jimp');
+const receiptProfile = require('../config/receiptProfile');
 const imagePreprocessService = require('./imagePreprocess.service');
 const {
   ANALYSIS_REGION_DEFINITIONS,
@@ -183,7 +184,7 @@ module.exports = {
       buildVisualStep(
         'aligned',
         'Template alinhado',
-        'Canhoto recortado e deskewado para encaixar no template fixo da MAR E RIO.',
+        `Canhoto recortado e deskewado para encaixar no template ${receiptProfile.template.label}.`,
         alignedStepPath,
         alignedImage,
       ),

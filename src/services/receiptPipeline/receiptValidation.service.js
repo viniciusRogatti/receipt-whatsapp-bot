@@ -1,4 +1,10 @@
 const { BUSINESS_THRESHOLDS } = require('./receiptConstants');
+const receiptProfile = require('../../config/receiptProfile');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../../config/receiptProfiles');
+
+const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
 
 module.exports = {
   validateReceiptStructure({
@@ -7,9 +13,9 @@ module.exports = {
     template = {},
     orientationProbe = {},
   }) {
-    const dataField = requiredFields.dataRecebimento || {};
-    const recebemosField = requiredFields.recebemosDeMarERio || {};
-    const nfeField = requiredFields.nfe || {};
+    const dataField = requiredFields[RECEIPT_FIELD_KEYS.dataRecebimento] || {};
+    const issuerHeaderField = requiredFields[RECEIPT_FIELD_KEYS.issuerHeader] || {};
+    const nfeField = requiredFields[RECEIPT_FIELD_KEYS.nfe] || {};
     const detectedFieldCount = Object.keys(requiredFields)
       .filter((fieldKey) => requiredFields[fieldKey].found)
       .length;
@@ -44,7 +50,7 @@ module.exports = {
     }
 
     if (!templateMatched) {
-      reasons.push('O layout esperado do canhoto da MAR E RIO nao bateu com seguranca suficiente.');
+      reasons.push(`O layout esperado do template ${receiptProfile.template.label} nao bateu com seguranca suficiente.`);
     }
 
     if (!dataField.found) {
@@ -55,8 +61,8 @@ module.exports = {
       reasons.push('O bloco da NF-e nao ficou legivel na ROI direita do template.');
     }
 
-    if (!recebemosField.found) {
-      reasons.push('RECEBEMOS DE MAR E RIO nao ficou estavel no cabecalho do template.');
+    if (!issuerHeaderField.found) {
+      reasons.push(`${issuerHeaderLabel} nao ficou estavel no cabecalho do template.`);
     }
 
     return {

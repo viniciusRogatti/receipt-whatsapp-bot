@@ -200,7 +200,7 @@ const renderSummary = async (session) => {
     const field = requiredFields[fieldKey];
     return `
       <article class="field-card">
-        <span class="label">${escapeHtml(fieldKey)}</span>
+        <span class="label">${escapeHtml(field.label || fieldKey)}</span>
         <strong>${field.found ? 'Encontrado' : 'Nao encontrado'}</strong>
         <p class="muted">Confianca: ${escapeHtml(field.confidence ?? 0)}</p>
         <p class="muted">${escapeHtml(field.matchedText || field.method || '')}</p>

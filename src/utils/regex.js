@@ -1,4 +1,8 @@
 const env = require('../config/env');
+const receiptProfile = require('../config/receiptProfile');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../config/receiptProfiles');
 
 const NF_LABEL_FRAGMENT = 'N\\s*F(?:[\\s.\\-_/]*[EEC])?';
 const NFE_MARKER_REGEX = new RegExp(`\\b${NF_LABEL_FRAGMENT}\\b|\\bNFE\\b`, 'gi');
@@ -15,27 +19,9 @@ const EXPECTED_DIGIT_FRAGMENT = (
 const DIGIT_GROUP_REGEX = new RegExp(`\\b(?:${EXPECTED_DIGIT_FRAGMENT})\\b`, 'g');
 
 const REQUIRED_FIELD_TARGETS = {
-  dataRecebimento: [
-    'data de recebimento',
-    'data recebimento',
-    'data do recebimento',
-  ],
-  recebemosDeMarERio: [
-    'recebemos de mar e rio',
-    'recebemos de mar rio',
-    'recebemos mar e rio',
-    'recebemos de marerio',
-    'mar e rio pescados',
-    'mar rio pescados',
-    'de mar e rio pescados',
-    'marerio pescados',
-  ],
-  nfe: [
-    'nf e',
-    'nfe',
-    'nf-e',
-    'nf c',
-  ],
+  [RECEIPT_FIELD_KEYS.dataRecebimento]: receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.dataRecebimento].aliases.slice(),
+  [RECEIPT_FIELD_KEYS.issuerHeader]: receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].aliases.slice(),
+  [RECEIPT_FIELD_KEYS.nfe]: receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.nfe].aliases.slice(),
 };
 
 const INVOICE_CONTEXT_PATTERNS = [

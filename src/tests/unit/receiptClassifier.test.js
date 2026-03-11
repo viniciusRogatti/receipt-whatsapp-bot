@@ -1,5 +1,8 @@
 const assert = require('assert');
 const receiptClassifierService = require('../../services/receiptClassifier.service');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../../config/receiptProfiles');
 
 module.exports = () => ([
   {
@@ -8,9 +11,9 @@ module.exports = () => ([
       const result = receiptClassifierService.classifyReceiptAnalysis({
         validation: { status: 'usable', templateMatched: true, metrics: { geometryScore: 0.84 } },
         requiredFields: {
-          dataRecebimento: { found: true, confidence: 0.84 },
-          recebemosDeMarERio: { found: true, confidence: 0.81 },
-          nfe: { found: true, confidence: 0.98 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: true, confidence: 0.84 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: true, confidence: 0.81 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: true, confidence: 0.98 },
         },
         nfExtraction: {
           nf: '16171762',
@@ -32,9 +35,9 @@ module.exports = () => ([
       const result = receiptClassifierService.classifyReceiptAnalysis({
         validation: { status: 'usable', templateMatched: true, metrics: { geometryScore: 0.8 } },
         requiredFields: {
-          dataRecebimento: { found: true, confidence: 0.89 },
-          recebemosDeMarERio: { found: false, confidence: 0.41 },
-          nfe: { found: true, confidence: 0.94 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: true, confidence: 0.89 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.41 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: true, confidence: 0.94 },
         },
         nfExtraction: {
           nf: '16171762',
@@ -52,7 +55,7 @@ module.exports = () => ([
     },
   },
   {
-    name: 'receiptClassifier valida pelo banco quando o cabecalho esta coberto mas a NF existe na MAR E RIO',
+    name: 'receiptClassifier valida pelo banco quando o cabecalho esta coberto mas a NF existe na empresa ativa',
     run: () => {
       const result = receiptClassifierService.classifyReceiptAnalysis({
         validation: {
@@ -61,9 +64,9 @@ module.exports = () => ([
           metrics: { geometryScore: 0.78 },
         },
         requiredFields: {
-          dataRecebimento: { found: true, confidence: 0.9 },
-          recebemosDeMarERio: { found: false, confidence: 0.2 },
-          nfe: { found: true, confidence: 0.95 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: true, confidence: 0.9 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.2 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: true, confidence: 0.95 },
         },
         nfExtraction: {
           nf: '1710496',
@@ -86,7 +89,7 @@ module.exports = () => ([
 
       assert.strictEqual(result.classification, 'valid');
       assert.strictEqual(result.metrics.databaseFallbackApplied, true);
-      assert.ok(result.reasons.some((reason) => reason.includes('existe na base da MAR E RIO')));
+      assert.ok(result.reasons.some((reason) => reason.includes('existe na base de')));
     },
   },
   {
@@ -95,9 +98,9 @@ module.exports = () => ([
       const result = receiptClassifierService.classifyReceiptAnalysis({
         validation: { status: 'invalid', templateMatched: false, metrics: { geometryScore: 0.12 } },
         requiredFields: {
-          dataRecebimento: { found: false, confidence: 0.22 },
-          recebemosDeMarERio: { found: false, confidence: 0.18 },
-          nfe: { found: false, confidence: 0.11 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: false, confidence: 0.22 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.18 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: false, confidence: 0.11 },
         },
         nfExtraction: {
           nf: null,
@@ -125,9 +128,9 @@ module.exports = () => ([
           },
         },
         requiredFields: {
-          dataRecebimento: { found: true, confidence: 0.74 },
-          recebemosDeMarERio: { found: false, confidence: 0.22 },
-          nfe: { found: true, confidence: 0.79 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: true, confidence: 0.74 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.22 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: true, confidence: 0.79 },
         },
         nfExtraction: {
           nf: '1710496',

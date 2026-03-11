@@ -1,5 +1,8 @@
 const assert = require('assert');
 const receiptValidationService = require('../../services/receiptPipeline/receiptValidation.service');
+const {
+  RECEIPT_FIELD_KEYS,
+} = require('../../config/receiptProfiles');
 
 module.exports = () => ([
   {
@@ -7,9 +10,9 @@ module.exports = () => ([
     run: () => {
       const result = receiptValidationService.validateReceiptStructure({
         requiredFields: {
-          dataRecebimento: { found: true, confidence: 0.82 },
-          recebemosDeMarERio: { found: false, confidence: 0.34 },
-          nfe: { found: true, confidence: 0.91 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: true, confidence: 0.82 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.34 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: true, confidence: 0.91 },
         },
         template: {
           templateMatched: true,
@@ -29,9 +32,9 @@ module.exports = () => ([
     run: () => {
       const result = receiptValidationService.validateReceiptStructure({
         requiredFields: {
-          dataRecebimento: { found: false, confidence: 0.12 },
-          recebemosDeMarERio: { found: false, confidence: 0.11 },
-          nfe: { found: false, confidence: 0.1 },
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: false, confidence: 0.12 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.11 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: false, confidence: 0.1 },
         },
         template: {
           templateMatched: false,

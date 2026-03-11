@@ -7,12 +7,14 @@ const clamp01 = (value) => Math.max(0, Math.min(1, value));
 const DATE_VALUE_REGEX = /\b\d{1,2}[\/.-]\d{1,2}(?:[\/.-]\d{2,4})?\b/;
 const FIELD_ROLE_HINTS = {
   dataRecebimento: ['data', 'recebimento', 'date', 'label'],
-  recebemosDeMarERio: ['recebemos', 'header', 'cabecalho'],
+  issuerHeader: ['recebemos', 'header', 'cabecalho', 'issuer'],
   nfe: ['nfe', 'invoice', 'nf_block', 'nf'],
 };
 
 const buildFieldMatch = (fieldKey, fieldSpec, documents) => {
   let bestResult = {
+    key: fieldKey,
+    label: fieldSpec.label,
     found: false,
     confidence: 0,
     method: 'no_match',
@@ -80,6 +82,8 @@ const buildFieldMatch = (fieldKey, fieldSpec, documents) => {
           if (Number(document.confidence || 0) >= 55) reasons.push('ocr_estavel');
 
       bestResult = {
+        key: fieldKey,
+        label: fieldSpec.label,
         found: confidence >= fieldSpec.acceptanceThreshold,
         confidence,
         method: match.method,
