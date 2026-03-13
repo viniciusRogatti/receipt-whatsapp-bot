@@ -9,6 +9,7 @@
     "start": "node src/index.js",
     "dev": "node src/server.js",
     "api": "node src/http/server.js",
+    "whatsapp": "node src/whatsapp.js",
     "worker": "node src/worker.js",
     "worker:once": "node src/worker.js --once",
     "maintenance:once": "node src/maintenance.js",
@@ -30,7 +31,9 @@
     "ioredis": "^5.7.0",
     "jimp": "^0.16.13",
     "multer": "^2.1.1",
+    "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "whatsapp-web.js": "^1.34.6"
   }
 }

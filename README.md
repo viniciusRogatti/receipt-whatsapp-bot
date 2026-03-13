@@ -186,7 +186,7 @@ Diagnostico de falha:
 - o resultado final agora informa explicitamente em qual etapa falhou
 - os checkpoints avaliados sao `Geometria do canhoto`, `Assinatura`, `DATA DE RECEBIMENTO`, `RECEBEMOS DE MAR E RIO`, `Bloco NF-e`, `Numero da NF` e `Conferencia da NF no banco`
 
-Comportamento futuro no WhatsApp:
+Comportamento atual no WhatsApp:
 
 - responder no grupo apenas quando a leitura falhar ou a imagem precisar ser refeita
 - se a NF for extraida corretamente, nao responder no grupo
@@ -249,9 +249,23 @@ Variaveis principais:
 - `RECEIPT_PROFILE_ID`: perfil ativo do canhoto. O projeto sai com `mar_e_rio`, mas a arquitetura agora permite adicionar outros perfis por empresa
 - `RECEIPT_INVOICE_LOOKUP_MODE`: `auto`, `backend_db`, `mock` ou `disabled`
 - `RECEIPT_INVOICE_LOOKUP_COMPANY_CODE`: empresa consultada no banco, por padrao `mar_e_rio`
+- `RECEIPT_BACKEND_SYNC_MODE`: `mock`, `full`, `status_only`, `alerts_only` ou `disabled`
 - `RECEIPT_LOCAL_FAST_MODE`: ativa o fluxo rapido no `test:local`
 - `RECEIPT_LOCAL_REPORT_ONLY`: imprime apenas o relatorio final no lote local
 - `RECEIPT_LOCAL_MAX_IMAGES`: limita quantas imagens do lote serao processadas
+- `WHATSAPP_SESSION_DIR`: pasta local usada pelo `LocalAuth`
+- `WHATSAPP_MEDIA_DIR`: staging temporario das imagens baixadas do WhatsApp
+- `WHATSAPP_CLIENT_ID`: identificador da sessao local do WhatsApp
+- `WHATSAPP_HEADLESS`: roda o Chromium em background
+- `WHATSAPP_BROWSER_EXECUTABLE_PATH`: caminho opcional para um Chrome/Chromium ja instalado
+- `WHATSAPP_BROWSER_ARGS`: argumentos extras do Chromium separados por virgula
+- `WHATSAPP_ALLOWED_GROUP_IDS`: allowlist opcional de grupos por `chatId`
+- `WHATSAPP_ALLOWED_GROUP_NAMES`: allowlist opcional de grupos por nome
+- `WHATSAPP_REPLY_ENABLED`: permite respostas no grupo
+- `WHATSAPP_REPLY_ON_OPERATIONAL_FAILURE`: responde quando a leitura passa mas a sincronizacao com o backend falha
+- `WHATSAPP_COMMANDS_ENABLED`: habilita comandos simples no grupo
+- `WHATSAPP_COMMAND_PREFIX`: prefixo dos comandos de texto, por padrao `!recibo`
+- `WHATSAPP_LOG_GROUPS_ON_READY`: lista os grupos visiveis quando a sessao conecta
 
 Padrao atual:
 
@@ -623,14 +637,30 @@ Arquivos:
 
 ## Integracao com WhatsApp
 
-O servico [whatsapp.service.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/services/whatsapp.service.js) ja deixa preparado:
+O fluxo agora tem integracao real com WhatsApp Web:
 
-- ponto de entrada para mensagem com imagem
-- funcao para baixar midia via injecao de dependencias
-- regra de resposta apenas quando a imagem nao puder ser confiavelmente analisada
-- modo assincrono opcional via `RECEIPT_ASYNC_WHATSAPP_MODE=true`, que apenas enfileira a imagem no pipeline central
+- runner dedicado em [whatsapp.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/whatsapp.js)
+- cliente real em [whatsappRuntime.service.js](/home/vinicius/Coding/4-Projetos%20pessoais/kptransportes/apps/receipt-whatsapp-bot/src/services/whatsappRuntime.service.js) com `whatsapp-web.js` + `LocalAuth`
+- leitura apenas de mensagens novas em grupos
+- download real da midia enviada no grupo
+- regra de resposta no grupo apenas quando a leitura falhar, pedir nova foto ou a sincronizacao operacional falhar
+- comandos simples de texto no grupo: `!recibo status` e `!recibo ajuda`
 
-Ainda nao existe integracao real com WhatsApp Web nesta etapa.
+Fluxo recomendado para uso em grupo:
+
+1. configure `RECEIPT_ASYNC_WHATSAPP_MODE=false`
+2. configure `RECEIPT_BACKEND_SYNC_MODE=full` para subir canhoto + marcar a NF como `delivered`
+3. se quiser testar sem subir o arquivo do canhoto no backend, use `RECEIPT_BACKEND_SYNC_MODE=status_only`
+4. autentique o bot com um telefone que ja participa do grupo alvo
+5. opcionalmente restrinja o teste com `WHATSAPP_ALLOWED_GROUP_IDS` ou `WHATSAPP_ALLOWED_GROUP_NAMES`
+6. rode `npm run whatsapp`
+
+Comportamento atual:
+
+- imagem valida: o bot nao responde no grupo e sincroniza o backend
+- imagem `review` ou `invalid`: o bot responde pedindo nova foto e cria alerta operacional
+- falha apos leitura valida: o bot responde informando que leu a imagem, mas nao conseguiu registrar no sistema
+- `RECEIPT_ASYNC_WHATSAPP_MODE=true`: o bot apenas enfileira a imagem; resposta no grupo apos o worker ainda nao existe nesse modo
 
 ## Integracao com API
 
@@ -646,6 +676,14 @@ Hoje o servico suporta:
 - `mock`, para desenvolvimento local puro
 - `backend_db`, consultando diretamente a base do backend
 - `auto`, tentando `backend_db` primeiro e caindo para `mock` se necessario
+
+Na sincronizacao operacional:
+
+- `RECEIPT_BACKEND_SYNC_MODE=mock`: simula o write-back como antes
+- `RECEIPT_BACKEND_SYNC_MODE=full`: faz upload do canhoto no backend e marca `Danfe`/`TripNote` como `delivered`
+- `RECEIPT_BACKEND_SYNC_MODE=status_only`: marca `Danfe`/`TripNote` como `delivered`, sem subir o canhoto no backend
+- `RECEIPT_BACKEND_SYNC_MODE=alerts_only`: cria apenas alertas operacionais para leituras nao automaticas
+- `RECEIPT_BACKEND_SYNC_MODE=disabled`: desliga a sincronizacao operacional
 
 ## Migracao segura do legado
 

@@ -18,6 +18,11 @@ const resolvePath = (targetPath, fallback) => {
   return path.resolve(projectRoot, raw);
 };
 
+const resolveOptionalPath = (targetPath) => {
+  const raw = String(targetPath || '').trim();
+  return raw ? path.resolve(projectRoot, raw) : '';
+};
+
 const parseExpectedLengths = (rawValue, fallback = [7]) => {
   const parsed = String(rawValue || '')
     .split(',')
@@ -53,6 +58,15 @@ const parseJsonObject = (rawValue, fallback = {}) => {
   } catch {
     return Object.assign({}, fallback);
   }
+};
+
+const parseCsvList = (rawValue, fallback = []) => {
+  const parsed = String(rawValue || '')
+    .split(',')
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+
+  return parsed.length ? parsed : fallback.slice();
 };
 
 const configuredReceiptProfileId = String(
@@ -184,9 +198,23 @@ const env = {
     process.env.RECEIPT_INVOICE_LOOKUP_BACKEND_ENV_PATH,
     '../../backend/.env',
   ),
+  receiptBackendSyncMode: String(process.env.RECEIPT_BACKEND_SYNC_MODE || 'mock').trim().toLowerCase(),
   receiptLocalFastMode: parseBoolean(process.env.RECEIPT_LOCAL_FAST_MODE, true),
   receiptLocalReportOnly: parseBoolean(process.env.RECEIPT_LOCAL_REPORT_ONLY, true),
   receiptLocalMaxImages: Math.max(0, Number(process.env.RECEIPT_LOCAL_MAX_IMAGES || 0)),
+  whatsappSessionDir: resolvePath(process.env.WHATSAPP_SESSION_DIR, './outputs/whatsapp-session'),
+  whatsappMediaDir: resolvePath(process.env.WHATSAPP_MEDIA_DIR, './outputs/whatsapp-media'),
+  whatsappClientId: String(process.env.WHATSAPP_CLIENT_ID || 'receipt-whatsapp-bot').trim(),
+  whatsappHeadless: parseBoolean(process.env.WHATSAPP_HEADLESS, true),
+  whatsappBrowserExecutablePath: resolveOptionalPath(process.env.WHATSAPP_BROWSER_EXECUTABLE_PATH),
+  whatsappBrowserArgs: parseCsvList(process.env.WHATSAPP_BROWSER_ARGS, []),
+  whatsappAllowedGroupIds: parseCsvList(process.env.WHATSAPP_ALLOWED_GROUP_IDS, []),
+  whatsappAllowedGroupNames: parseCsvList(process.env.WHATSAPP_ALLOWED_GROUP_NAMES, []),
+  whatsappReplyEnabled: parseBoolean(process.env.WHATSAPP_REPLY_ENABLED, true),
+  whatsappReplyOnOperationalFailure: parseBoolean(process.env.WHATSAPP_REPLY_ON_OPERATIONAL_FAILURE, true),
+  whatsappCommandsEnabled: parseBoolean(process.env.WHATSAPP_COMMANDS_ENABLED, true),
+  whatsappCommandPrefix: String(process.env.WHATSAPP_COMMAND_PREFIX || '!recibo').trim() || '!recibo',
+  whatsappLogGroupsOnReady: parseBoolean(process.env.WHATSAPP_LOG_GROUPS_ON_READY, true),
 };
 
 module.exports = env;

@@ -12,6 +12,8 @@ const testModules = [
   require('./unit/receiptValidation.test'),
   require('./unit/receiptTemplate.test'),
   require('./unit/profileResolver.test'),
+  require('./unit/backendSyncSupport.test'),
+  require('./unit/whatsappRuntimeSupport.test'),
   require('./unit/fileJobQueue.test'),
   require('./unit/documentFieldParser.test'),
   require('./unit/processingStateRepository.test'),
