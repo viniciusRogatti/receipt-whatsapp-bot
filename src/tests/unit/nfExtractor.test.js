@@ -281,4 +281,28 @@ module.exports = () => ([
       assert.strictEqual(result.nf, null);
     },
   },
+  {
+    name: 'nfExtractor sustenta NF exata lida sozinha no bloco quando a ROI esta alinhada',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'nf-block-exato',
+            sourceType: 'nf_roi',
+            confidence: 19,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'rotate_right__document_gray',
+            },
+            textRaw: '1714164 1',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, '1714164');
+      assert.ok(result.confidence >= 0.6);
+    },
+  },
 ]);

@@ -11,6 +11,7 @@ const testModules = [
   require('./unit/receiptClassifier.test'),
   require('./unit/receiptValidation.test'),
   require('./unit/receiptTemplate.test'),
+  require('./unit/imagePreprocess.test'),
   require('./unit/profileResolver.test'),
   require('./unit/backendSyncSupport.test'),
   require('./unit/whatsappRuntimeSupport.test'),

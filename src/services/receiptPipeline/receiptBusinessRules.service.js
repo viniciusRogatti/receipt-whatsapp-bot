@@ -107,12 +107,20 @@ module.exports = {
       && Number(nfExtraction.supportCount || 0) >= 2
       && invoiceConfirmedInDb
     );
+    const databaseStructuralFallbackEligible = (
+      !!nfeField.found
+      && geometryScore >= BUSINESS_THRESHOLDS.minTemplateGeometryScore
+      && !!(nfExtraction && nfExtraction.nf)
+      && nfConfidence >= 0.6
+      && invoiceConfirmedInDb
+    );
     const allCoreFieldsDetected = !!dataField.found && !!issuerHeaderField.found && !!nfeField.found;
 
     return {
       total,
       fallbackEligible,
       databaseFallbackEligible,
+      databaseStructuralFallbackEligible,
       allCoreFieldsDetected,
       hasStrongNf: !!(nfExtraction && nfExtraction.nf) && nfConfidence >= BUSINESS_THRESHOLDS.validNfConfidence,
       scoreBreakdown: {
@@ -201,6 +209,15 @@ module.exports = {
       reasons.push('A origem do canhoto foi confirmada pela consulta da NF no banco, mantendo DATA DE RECEBIMENTO e NF-e como ancoras estruturais.');
       suggestedActions.push('seguir_para_integracao_api');
     } else if (
+      score.databaseStructuralFallbackEligible
+      && score.total >= Math.max(60, BUSINESS_THRESHOLDS.reviewScore)
+      && validationStatus !== 'invalid'
+    ) {
+      classification = 'valid';
+      reasons.push(`A NF extraida foi confirmada na base de ${companyName} e o bloco NF-e ficou legivel o bastante para fechamento automatico.`);
+      reasons.push('O canhoto manteve geometria util, mesmo sem todos os labels textuais fecharem por OCR.');
+      suggestedActions.push('seguir_para_integracao_api');
+    } else if (
       validationStatus !== 'invalid'
       || score.total >= BUSINESS_THRESHOLDS.reviewScore
       || validation.templateMatched
@@ -267,6 +284,7 @@ module.exports = {
         nfConfidence: score.metrics.nfConfidence,
         fallbackApplied: classification === 'valid' && score.fallbackEligible && !score.allCoreFieldsDetected,
         databaseFallbackApplied: classification === 'valid' && score.databaseFallbackEligible,
+        databaseStructuralFallbackApplied: classification === 'valid' && score.databaseStructuralFallbackEligible,
         validationStatus,
         geometryHardReject,
         invoiceConfirmedInDb: score.metrics.invoiceConfirmedInDb,
@@ -274,6 +292,7 @@ module.exports = {
       scoreBreakdown: score.scoreBreakdown,
       fallbackApplied: score.fallbackEligible && !score.allCoreFieldsDetected,
       databaseFallbackApplied: classification === 'valid' && score.databaseFallbackEligible,
+      databaseStructuralFallbackApplied: classification === 'valid' && score.databaseStructuralFallbackEligible,
       allCoreFieldsDetected: score.allCoreFieldsDetected,
     };
   },

@@ -194,6 +194,19 @@ const NF_ROI_PRIMARY_PLAN = [
       classify_bln_numeric_mode: '1',
     },
   },
+  {
+    id: 'nf_block_digits_window',
+    roiIds: ['nf_block', 'nf_block_wide'],
+    roiProfileId: 'nf_digits_threshold_4x',
+    sourceType: 'nf_roi',
+    targetRole: 'nf_digits_block_window',
+    cropBox: { x: 0.06, y: 0.18, width: 0.9, height: 0.34 },
+    parameters: {
+      tessedit_pageseg_mode: '7',
+      tessedit_char_whitelist: '0123456789',
+      classify_bln_numeric_mode: '1',
+    },
+  },
 ];
 
 const NF_ROI_FALLBACK_PLAN = [

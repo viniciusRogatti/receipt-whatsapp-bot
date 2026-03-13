@@ -127,6 +127,13 @@ const buildBoundingBoxFromCorners = (corners = []) => {
   };
 };
 
+const buildFullImageBounds = (image) => ({
+  x: 0,
+  y: 0,
+  width: image.bitmap.width,
+  height: image.bitmap.height,
+});
+
 const percentile = (values = [], ratio = 0.5) => {
   if (!values.length) return 0;
   const sorted = values.slice().sort((left, right) => left - right);
@@ -1183,6 +1190,13 @@ const buildAlignmentCandidate = ({
   const aspectScore = Math.max(0, 1 - (aspectDelta / Math.max(RECEIPT_TEMPLATE.aspectRatio, 1)));
   const geometryScore = Number(geometry && geometry.geometryScore) || 0;
   const anchorScore = nfAnchor && nfAnchor.detected ? Number(nfAnchor.score || 0) : 0;
+  const preCroppedReceiptBonus = (
+    kind === 'source_full'
+    && referenceAspectRatio >= (RECEIPT_TEMPLATE.minAspectRatio * 0.95)
+    && referenceAspectRatio <= (RECEIPT_TEMPLATE.maxAspectRatio * 1.05)
+  )
+    ? 0.2
+    : 0;
   const signaturePenalty = (
     signatureCheck
     && signatureCheck.darkRatio >= SIGNATURE_DARK_RATIO_ALERT
@@ -1208,6 +1222,7 @@ const buildAlignmentCandidate = ({
       + (geometryScore * 0.34)
       + (anchorScore * 0.22)
       + ((geometry && geometry.templateMatched) ? 0.08 : 0)
+      + preCroppedReceiptBonus
       - signaturePenalty
       - warpPenalty
       - trimPenalty,
@@ -1224,6 +1239,7 @@ const buildAlignmentCandidate = ({
     geometry,
     qualityScore,
     rawAspectRatio: Number(referenceAspectRatio.toFixed(2)),
+    preCroppedReceiptBonus,
     secondaryTrim,
     suspiciousSignature: signaturePenalty > 0,
     suspiciousWarp: warpPenalty > 0,
@@ -1303,6 +1319,7 @@ module.exports = {
   alignReceiptToTemplate(image) {
     const contour = this.detectReceiptContour(image);
     const alignmentGeometry = computeTemplateGeometryScore(image, contour);
+    const fullImageGeometry = computeTemplateGeometryScore(image, buildFullImageBounds(image));
     const warped = contour.corners ? warpPerspective(image.clone(), contour.corners) : null;
     const contourCrop = contour.bounds
       ? image.clone().crop(contour.bounds.x, contour.bounds.y, contour.bounds.width, contour.bounds.height)
@@ -1329,6 +1346,13 @@ module.exports = {
       ? computeTemplateGeometryScore(image, brightBandBounds)
       : null;
     const candidates = [
+      buildAlignmentCandidate({
+        sourceImage: image,
+        candidateImage: image.clone(),
+        kind: 'source_full',
+        warped: false,
+        geometry: fullImageGeometry,
+      }),
       buildAlignmentCandidate({
         sourceImage: image,
         candidateImage: warped || contourCrop,

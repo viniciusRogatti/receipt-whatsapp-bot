@@ -308,6 +308,23 @@ const buildSourceBonus = (source) => {
   return score;
 };
 
+const hasDigitDominantShortEvidence = (candidateNf, evidenceItems = []) => evidenceItems.some((item) => {
+  if (!item || item.requestedRoiId !== 'nf_block') return false;
+  if (String(item.sourceType || '').indexOf('nf_roi') < 0) return false;
+
+  const normalizedEvidence = normalizeOcrNoise(item.evidence || '').trim();
+  const compactEvidence = normalizedEvidence.replace(/[\s.,:;_-]+/g, '');
+  const digits = digitsOnly(normalizedEvidence);
+  const noise = compactEvidence.replace(/\d/g, '');
+
+  return (
+    digits === candidateNf
+    && compactEvidence.length <= (digits.length + 2)
+    && noise.length <= 1
+    && Number(item.sourceConfidence || 0) >= 15
+  );
+});
+
 const DIRECT_PATTERNS = [
   {
     id: 'nf_context_number',
@@ -596,13 +613,17 @@ const aggregateCandidates = (candidates = []) => Object.keys(
     && uniqueRois.includes('nf_number_line')
   );
   const contextBonus = contexts.foundNfe && contexts.foundNumeroMarker ? 0.06 : contexts.foundNfe ? 0.03 : 0;
+  const digitDominantShortEvidence = hasDigitDominantShortEvidence(nf, evidence);
+  const digitDominantRoiBonus = digitDominantShortEvidence ? 0.12 : 0;
   const contextlessPenalty = contexts.foundNfe || contexts.foundNumeroMarker
     ? 0
     : strongTightConsensus || strongLineConsensus
       ? 0
+      : digitDominantShortEvidence
+        ? 0.06
       : supportsPreciseTemplate
-      ? 0.05
-      : 0.28;
+        ? 0.05
+        : 0.28;
   const lengthPenalty = nf.length <= 6 && !contexts.foundNfe && !contexts.foundNumeroMarker ? 0.06 : 0;
   const preciseTemplateBonus = supportsPreciseTemplate ? 0.08 : 0;
   let confidence = Number(Math.max(0, Math.min(
@@ -612,6 +633,7 @@ const aggregateCandidates = (candidates = []) => Object.keys(
       + roiBonus
       + variantBonus
       + contextBonus
+      + digitDominantRoiBonus
       + preciseTemplateBonus
       - contextlessPenalty
       - lengthPenalty,

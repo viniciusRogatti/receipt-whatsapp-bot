@@ -61,6 +61,11 @@ const ORIENTATION_CANDIDATES = [
   { id: 'rotate_left', label: 'Orientacao -90 graus', rotation: -90 },
   { id: 'upside_down', label: 'Orientacao 180 graus', rotation: 180 },
 ];
+const RECEIPT_CAPTURE_PROFILE_DEFAULT = 'document_photo';
+const RECEIPT_CAPTURE_PROFILE_STRIP = 'receipt_strip';
+const RECEIPT_STRIP_MIN_ELONGATION = 4.2;
+const RECEIPT_STRIP_MAX_SHORT_EDGE = 420;
+const RECEIPT_STRIP_MIN_LONG_EDGE = 900;
 
 const VARIANT_PROFILES = [
   {
@@ -723,6 +728,35 @@ const prepareBaseImage = async (imagePath, profile = 'debug') => {
   };
 };
 
+const classifyReceiptCapture = (baseImage) => {
+  const width = Math.max(1, baseImage.bitmap.width);
+  const height = Math.max(1, baseImage.bitmap.height);
+  const longestEdge = Math.max(width, height);
+  const shortestEdge = Math.max(1, Math.min(width, height));
+  const elongation = longestEdge / shortestEdge;
+  const isLandscape = width >= height;
+  const preferredOrientationIds = isLandscape
+    ? ['upright', 'upside_down']
+    : ['rotate_right', 'rotate_left'];
+  const stripDetected = (
+    longestEdge >= RECEIPT_STRIP_MIN_LONG_EDGE
+    && shortestEdge <= RECEIPT_STRIP_MAX_SHORT_EDGE
+    && elongation >= RECEIPT_STRIP_MIN_ELONGATION
+  );
+
+  return {
+    id: stripDetected
+      ? RECEIPT_CAPTURE_PROFILE_STRIP
+      : RECEIPT_CAPTURE_PROFILE_DEFAULT,
+    width,
+    height,
+    longestEdge,
+    shortestEdge,
+    elongation: Number(elongation.toFixed(2)),
+    preferredOrientationIds,
+  };
+};
+
 const persistVariant = async (variantImage, variantId, variantsDir) => {
   const targetPath = path.join(variantsDir, `${variantId}.png`);
   await variantImage.getBufferAsync(PNG_MIME).then((buffer) => fs.promises.writeFile(targetPath, buffer));
@@ -806,19 +840,20 @@ const buildVariantAlignment = (orientedAlignment, variantImage) => {
   };
 };
 
-const resolveOrientationCandidates = (baseImage, profile) => {
-  if (profile !== 'local_fast') {
+const resolveOrientationCandidates = (baseImage, profile, captureProfile = null) => {
+  const resolvedCaptureProfile = captureProfile || classifyReceiptCapture(baseImage);
+  const shouldRestrictOrientations = (
+    profile === 'local_fast'
+    || resolvedCaptureProfile.id === RECEIPT_CAPTURE_PROFILE_STRIP
+  );
+
+  if (!shouldRestrictOrientations) {
     return ORIENTATION_CANDIDATES;
   }
 
-  const isLandscape = baseImage.bitmap.width >= baseImage.bitmap.height;
-  return isLandscape
-    ? ORIENTATION_CANDIDATES.filter((candidate) => (
-      candidate.id === 'upright' || candidate.id === 'upside_down'
-    ))
-    : ORIENTATION_CANDIDATES.filter((candidate) => (
-      candidate.id === 'rotate_right' || candidate.id === 'rotate_left'
-    ));
+  return ORIENTATION_CANDIDATES.filter((candidate) => (
+    resolvedCaptureProfile.preferredOrientationIds.includes(candidate.id)
+  ));
 };
 
 const toJpegBase64 = async (pipeline) => {
@@ -865,6 +900,10 @@ module.exports = {
   focusDocument,
   processImageForOcr,
   prepareBaseImage,
+  __testables: {
+    classifyReceiptCapture,
+    resolveOrientationCandidates,
+  },
 
   async preprocessImage({ imagePath, outputDir, profile = 'debug' }) {
     await ensureDir(outputDir);
@@ -872,6 +911,7 @@ module.exports = {
     await ensureDir(variantsDir);
 
     const { image: baseImage, orientation } = await prepareBaseImage(imagePath, profile);
+    const captureProfile = classifyReceiptCapture(baseImage);
     const variants = [];
     const orientationCandidates = [];
     const edgeConfig = profile === 'local_fast'
@@ -879,7 +919,7 @@ module.exports = {
       : { minEdge: MIN_LONGEST_EDGE, maxEdge: MAX_LONGEST_EDGE };
     const persistIntermediate = profile !== 'local_fast';
 
-    const activeOrientationCandidates = resolveOrientationCandidates(baseImage, profile);
+    const activeOrientationCandidates = resolveOrientationCandidates(baseImage, profile, captureProfile);
 
     for (const orientationDefinition of activeOrientationCandidates) {
       const orientedBase = buildOrientedBase(baseImage, orientationDefinition.rotation);
@@ -992,6 +1032,7 @@ module.exports = {
       outputDir,
       variantsDir,
       profile,
+      captureProfile,
       orientation,
       orientationCandidates,
       totalVariants: variants.length,

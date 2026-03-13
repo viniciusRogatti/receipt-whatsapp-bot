@@ -10,6 +10,7 @@ const SHARPEN_KERNEL = [
   [-1, 5, -1],
   [0, -1, 0],
 ];
+const MIN_TRUSTED_NF_ANCHOR_SCORE = 0.6;
 
 const ROI_PROFILE_DEFINITIONS = {
   label_gray_2x: {
@@ -159,7 +160,12 @@ module.exports = {
       }];
       const nfAnchor = sourceVariant.alignment && sourceVariant.alignment.nfAnchor;
 
-      if (nfAnchor && nfAnchor.detected && regionDefinition.id !== 'roi_signature') {
+      if (
+        nfAnchor
+        && nfAnchor.detected
+        && Number(nfAnchor.score || 0) >= MIN_TRUSTED_NF_ANCHOR_SCORE
+        && regionDefinition.id !== 'roi_signature'
+      ) {
         const anchoredPixelBox = receiptTemplateService.buildAnchoredPixelBox(
           sourceImage,
           regionDefinition.box,

@@ -2,7 +2,10 @@ const assert = require('assert');
 const apiService = require('../../services/api.service');
 const receiptAnalysisService = require('../../services/receiptAnalysis.service');
 
-const { resolveCandidateByInvoiceLookup } = receiptAnalysisService.__testables;
+const {
+  resolveCandidateByInvoiceLookup,
+  mergeOrientationProbeFallbackFields,
+} = receiptAnalysisService.__testables;
 
 const buildCandidate = ({
   nf,
@@ -94,6 +97,50 @@ module.exports = () => ([
       } finally {
         apiService.findInvoiceByNumber = originalFindInvoiceByNumber;
       }
+    },
+  },
+  {
+    name: 'receiptAnalysis aproveita campo do orientation probe quando a estrutura final falha',
+    run: async () => {
+      const merged = mergeOrientationProbeFallbackFields({
+        requiredFields: {
+          dataRecebimento: { found: false, confidence: 0.12 },
+          issuerHeader: { found: false, confidence: 0.18 },
+          nfe: { found: false, confidence: 0.2 },
+        },
+        orientationProbe: {
+          bestOrientationId: 'rotate_left',
+          results: [
+            {
+              orientationId: 'rotate_left',
+              requiredFields: {
+                dataRecebimento: {
+                  found: false,
+                  confidence: 0.41,
+                  method: 'token_fuzzy',
+                  reasons: ['regiao_esperada'],
+                },
+                issuerHeader: {
+                  found: false,
+                  confidence: 0.44,
+                  method: 'token_fuzzy',
+                  reasons: ['regiao_esperada'],
+                },
+                nfe: {
+                  found: true,
+                  confidence: 0.69,
+                  method: 'token_fuzzy',
+                  reasons: ['regiao_esperada', 'recorte_especifico'],
+                },
+              },
+            },
+          ],
+        },
+      });
+
+      assert.strictEqual(merged.requiredFields.nfe.found, true);
+      assert.strictEqual(merged.requiredFields.nfe.sourceType, 'orientation_probe_fallback');
+      assert.strictEqual(merged.mergedCount, 1);
     },
   },
 ]);

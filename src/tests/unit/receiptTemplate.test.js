@@ -71,6 +71,22 @@ const buildSyntheticReceipt = async () => {
   return image;
 };
 
+const buildPreCroppedSyntheticReceipt = async () => {
+  const white = Jimp.rgbaToInt(255, 255, 255, 255);
+  const black = Jimp.rgbaToInt(0, 0, 0, 255);
+  const image = new Jimp(1800, 340, white);
+
+  drawBox(image, 24, 34, 1752, 252, black);
+  drawBox(image, 24, 34, 1752, 58, black);
+  drawBox(image, 24, 92, 240, 194, black);
+  drawBox(image, 1490, 34, 286, 252, black);
+  fillBox(image, 420, 126, 760, 64, black);
+  fillBox(image, 1560, 76, 116, 20, black);
+  fillBox(image, 1560, 154, 144, 28, black);
+
+  return image;
+};
+
 module.exports = () => ([
   {
     name: 'receiptTemplate detecta e normaliza o canhoto horizontal sintetico',
@@ -144,6 +160,17 @@ module.exports = () => ([
       assert.strictEqual(signature.evaluated, true);
       assert.strictEqual(signature.present, true);
       assert.ok(signature.score >= 0.12);
+    },
+  },
+  {
+    name: 'receiptTemplate preserva imagem inteira quando o canhoto ja vem recortado',
+    run: async () => {
+      const image = await buildPreCroppedSyntheticReceipt();
+      const aligned = receiptTemplateService.alignReceiptToTemplate(image);
+
+      assert.strictEqual(aligned.warp.candidateKind, 'source_full');
+      assert.strictEqual(aligned.warp.applied, false);
+      assert.ok(aligned.geometryScore >= 0.58);
     },
   },
 ]);

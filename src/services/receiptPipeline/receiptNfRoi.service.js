@@ -12,6 +12,7 @@ const ROI_MAP = NF_ROI_DEFINITIONS.reduce((accumulator, definition) => {
   accumulator[definition.id] = definition;
   return accumulator;
 }, {});
+const MIN_TRUSTED_NF_ANCHOR_SCORE = 0.6;
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -61,6 +62,7 @@ const resolvePixelBox = ({ sourceImage, requestedDefinition, sourceVariant }) =>
     && sourceVariant.alignment
     && sourceVariant.alignment.nfAnchor
     && sourceVariant.alignment.nfAnchor.detected
+    && Number(sourceVariant.alignment.nfAnchor.score || 0) >= MIN_TRUSTED_NF_ANCHOR_SCORE
       ? sourceVariant.alignment.nfAnchor
       : null;
   if (nfAnchor) {

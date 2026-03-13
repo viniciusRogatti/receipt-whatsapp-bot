@@ -24,6 +24,11 @@ const {
 const NF_BLOCK_DEFINITION = NF_ROI_DEFINITIONS.find((definition) => definition.id === 'nf_block') || null;
 const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
 const companyName = receiptProfile.company.displayName;
+const ORIENTATION_PROBE_FALLBACK_THRESHOLDS = {
+  [RECEIPT_FIELD_KEYS.dataRecebimento]: 0.55,
+  [RECEIPT_FIELD_KEYS.issuerHeader]: 0.58,
+  [RECEIPT_FIELD_KEYS.nfe]: 0.64,
+};
 const NF_BLOCK_RESCUE_CROPS = [
   {
     id: 'nf_block_clean_rescue_full',
@@ -431,6 +436,58 @@ const toCheckpointStatus = (condition, fallbackCondition = false) => {
   return 'failed';
 };
 
+const mergeOrientationProbeFallbackFields = ({
+  requiredFields = {},
+  orientationProbe = {},
+}) => {
+  const merged = Object.assign({}, requiredFields);
+  const bestOrientation = Array.isArray(orientationProbe.results)
+    ? orientationProbe.results.find((result) => result.orientationId === orientationProbe.bestOrientationId)
+      || orientationProbe.results[0]
+      || null
+    : null;
+  const probeFields = bestOrientation && bestOrientation.requiredFields
+    ? bestOrientation.requiredFields
+    : {};
+  let mergedCount = 0;
+
+  Object.keys(ORIENTATION_PROBE_FALLBACK_THRESHOLDS).forEach((fieldKey) => {
+    const currentField = merged[fieldKey] || {};
+    if (currentField.found) return;
+
+    const probeField = probeFields[fieldKey];
+    if (!probeField) return;
+
+    const fallbackThreshold = ORIENTATION_PROBE_FALLBACK_THRESHOLDS[fieldKey];
+    const canFallback = !!(
+      probeField.found
+      || (
+        Number(probeField.confidence || 0) >= fallbackThreshold
+        && Array.isArray(probeField.reasons)
+        && probeField.reasons.includes('regiao_esperada')
+      )
+    );
+
+    if (!canFallback) return;
+
+    merged[fieldKey] = Object.assign({}, probeField, {
+      found: true,
+      method: `${probeField.method || 'orientation_probe'}__fallback`,
+      sourceType: 'orientation_probe_fallback',
+      reasons: Array.isArray(probeField.reasons)
+        ? probeField.reasons.concat(['fallback_probe_orientacao'])
+        : ['fallback_probe_orientacao'],
+    });
+    mergedCount += 1;
+  });
+
+  return {
+    requiredFields: merged,
+    mergedCount,
+    bestOrientationId: bestOrientation ? bestOrientation.orientationId : null,
+  };
+};
+
 const buildFailureDiagnostics = ({
   template = {},
   validation = {},
@@ -578,6 +635,7 @@ module.exports = {
     isEligibleForFuzzyDbRescue,
     resolveCandidateByInvoiceLookup,
     resolveFuzzyDbRescue,
+    mergeOrientationProbeFallbackFields,
   },
 
   async analyzeImage({ imagePath, outputDir, onProgress = null, profile = 'batch' }) {
@@ -600,6 +658,10 @@ module.exports = {
       outputDir,
       profile,
     });
+    const effectiveFastMode = fastMode || (
+      preprocess.captureProfile
+      && preprocess.captureProfile.id === 'receipt_strip'
+    );
     const afterPreprocess = Date.now();
     emitProgress({
       step: 'preprocess',
@@ -607,6 +669,8 @@ module.exports = {
       message: `${preprocess.totalVariants} variantes orientadas e preprocessadas foram geradas.`,
       data: {
         totalVariants: preprocess.totalVariants,
+        captureProfile: preprocess.captureProfile ? preprocess.captureProfile.id : null,
+        fastMode: effectiveFastMode,
       },
     });
 
@@ -617,7 +681,7 @@ module.exports = {
     });
     const ocrProbe = await receiptOrientationService.selectBestOrientation({
       preprocess,
-      fastMode,
+      fastMode: effectiveFastMode,
     });
     const selectedOrientation = (preprocess.orientationCandidates || []).find(
       (candidate) => candidate.id === ocrProbe.bestOrientationId,
@@ -642,7 +706,7 @@ module.exports = {
     const globalOcrResult = await receiptStructuredOcrService.runGlobalSupportOcr({
       preprocess,
       orientationProbe: ocrProbe,
-      fastMode,
+      fastMode: effectiveFastMode,
     });
     emitProgress({
       step: 'global_ocr',
@@ -661,7 +725,7 @@ module.exports = {
     const regionOcrResult = await receiptStructuredOcrService.runRegionOcr({
       preprocess,
       orientationProbe: ocrProbe,
-      fastMode,
+      fastMode: effectiveFastMode,
     });
     const structuredOcr = receiptStructuredOcrService.buildStructuredOcrResult({
       preprocess,
@@ -689,6 +753,20 @@ module.exports = {
       documents: structuredOcr.documents,
       fullOcr: structuredOcr.fullOcr,
       regionOcr: structuredOcr.regionOcr,
+    });
+    const orientationFallback = mergeOrientationProbeFallbackFields({
+      requiredFields: detection.requiredFields,
+      orientationProbe: ocrProbe,
+    });
+    detection.requiredFields = orientationFallback.requiredFields;
+    detection.summary = Object.assign({}, detection.summary, {
+      detectedCount: Object.keys(detection.requiredFields)
+        .filter((fieldKey) => detection.requiredFields[fieldKey].found)
+        .length,
+      missingFields: Object.keys(detection.requiredFields)
+        .filter((fieldKey) => !detection.requiredFields[fieldKey].found),
+      orientationProbeFallbackCount: orientationFallback.mergedCount,
+      orientationProbeFallbackOrientationId: orientationFallback.bestOrientationId,
     });
     const template = {
       templateId: RECEIPT_TEMPLATE.id,
@@ -754,7 +832,7 @@ module.exports = {
       preprocess,
       orientationProbe: ocrProbe,
       outputDir,
-      fastMode,
+      fastMode: effectiveFastMode,
     });
     let nfExtraction = await nfExtractorService.extractInvoiceNumber({
       preprocess,
@@ -763,7 +841,7 @@ module.exports = {
       documents: structuredOcr.documents.concat(nfRescueDocuments),
       fullOcr: structuredOcr.fullOcr,
       regionOcr: structuredOcr.regionOcr,
-      fastMode,
+      fastMode: effectiveFastMode,
     });
     const afterNfExtraction = Date.now();
     emitProgress({
@@ -845,6 +923,8 @@ module.exports = {
       debug: {
         selectedVariant: ocrProbe.bestVariantId,
         selectedOrientationId: ocrProbe.bestOrientationId,
+        captureProfile: preprocess.captureProfile ? preprocess.captureProfile.id : null,
+        fastMode: effectiveFastMode,
         savedImages: [
           template.alignedFilePath,
           template.maskedFilePath,

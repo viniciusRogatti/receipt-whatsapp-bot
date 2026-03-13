@@ -145,4 +145,41 @@ module.exports = () => ([
       assert.ok(result.reasons.some((reason) => reason.includes('Fundo muito claro')));
     },
   },
+  {
+    name: 'receiptClassifier aceita pelo banco quando a NF e o bloco NF-e estao fortes mesmo sem todos os labels',
+    run: () => {
+      const result = receiptClassifierService.classifyReceiptAnalysis({
+        validation: {
+          status: 'review',
+          templateMatched: true,
+          metrics: { geometryScore: 0.77 },
+        },
+        requiredFields: {
+          [RECEIPT_FIELD_KEYS.dataRecebimento]: { found: false, confidence: 0.43 },
+          [RECEIPT_FIELD_KEYS.issuerHeader]: { found: false, confidence: 0.55 },
+          [RECEIPT_FIELD_KEYS.nfe]: { found: true, confidence: 0.69 },
+        },
+        nfExtraction: {
+          nf: '1714164',
+          confidence: 0.68,
+          supportCount: 1,
+          sourceTypes: ['nf_roi'],
+        },
+        invoiceLookup: {
+          found: true,
+          mode: 'backend_db',
+          invoice: {
+            invoiceNumber: '1714164',
+            companyId: 1,
+          },
+        },
+        fullOcr: {
+          bestConfidence: 40,
+        },
+      });
+
+      assert.strictEqual(result.classification, 'valid');
+      assert.strictEqual(result.metrics.databaseStructuralFallbackApplied, true);
+    },
+  },
 ]);
