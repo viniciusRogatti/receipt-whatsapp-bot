@@ -1,7 +1,11 @@
 node_modules/
+.venv/
+.wwebjs_cache/
 .env
 outputs/*
 !outputs/.gitkeep
 test-images/*
 !test-images/.gitkeep
 *.traineddata
+__pycache__/
+*.pyc
