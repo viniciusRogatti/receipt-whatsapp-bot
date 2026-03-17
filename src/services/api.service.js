@@ -6,6 +6,7 @@ const env = require('../config/env');
 const {
   buildAlertPayload,
   guessMimeTypeFromPath,
+  normalizeClassification,
   normalizeInvoiceNumber,
   resolveSyncAction,
 } = require('./backendSyncSupport.service');
@@ -66,6 +67,7 @@ const loadBackendContext = async () => {
       Trips: models.Trips,
       AlertsService: backendRequire('./src/services/AlertsService'),
       DanfesService: backendRequire('./src/services/DanfesService'),
+      ReceiptWhatsappActivityService: backendRequire('./src/services/ReceiptWhatsappActivityService'),
       ReceiptsService: backendRequire('./src/services/ReceiptsService'),
     };
   })().catch((error) => {
@@ -230,6 +232,7 @@ const resolveDeliveryContext = async (invoiceNumber, companyId) => {
   if (!companyId) {
     return {
       tripId: null,
+      tripNoteId: null,
       driverId: null,
       tripDate: null,
     };
@@ -243,7 +246,7 @@ const resolveDeliveryContext = async (invoiceNumber, companyId) => {
       company_id: companyId,
       invoice_number: key,
     },
-    attributes: ['trip_id', 'created_at', 'updated_at'],
+    attributes: ['id', 'trip_id', 'created_at', 'updated_at'],
     include: [{
       model: Trips,
       required: false,
@@ -255,11 +258,42 @@ const resolveDeliveryContext = async (invoiceNumber, companyId) => {
 
   return {
     tripId: tripNote && tripNote.trip_id ? Number(tripNote.trip_id) : null,
+    tripNoteId: tripNote && tripNote.id ? Number(tripNote.id) : null,
     driverId: tripNote && tripNote.Trip && tripNote.Trip.driver_id
       ? Number(tripNote.Trip.driver_id)
       : null,
     tripDate: tripNote && tripNote.Trip ? tripNote.Trip.date : null,
   };
+};
+
+const buildWhatsappAlertDedupeKey = (code, metadata = {}) => {
+  const normalizedCode = normalizeText(code).toUpperCase();
+  const messageId = normalizeText(metadata.messageId);
+
+  if (!normalizedCode || !messageId) return '';
+  return `receipt-whatsapp:${normalizedCode}:${messageId}`;
+};
+
+const buildWhatsappSuccessSummary = (invoiceNumber, metadata = {}) => {
+  const normalizedInvoice = normalizeInvoiceNumber(invoiceNumber);
+  const groupLabel = normalizeText(metadata.groupName || metadata.groupId || 'grupo desconhecido');
+  const senderLabel = normalizeText(
+    metadata.senderContactName
+    || metadata.senderName
+    || metadata.senderPhone
+    || metadata.sender
+    || '',
+  );
+
+  if (!normalizedInvoice) {
+    return `Canhoto processado pelo bot no grupo ${groupLabel}.`;
+  }
+
+  if (senderLabel) {
+    return `NF ${normalizedInvoice} marcada como entregue pelo bot no grupo ${groupLabel}. Remetente: ${senderLabel}.`;
+  }
+
+  return `NF ${normalizedInvoice} marcada como entregue pelo bot no grupo ${groupLabel}.`;
 };
 
 const uploadReceiptEvidence = async ({ invoiceNumber, imagePath, companyScope, metadata = {} }) => {
@@ -356,17 +390,23 @@ const createAlertInBackend = async (payload = {}, companyScope) => {
     ? companyScope
     : await resolveCompanyScopeFromLookup(null);
   const actor = buildSystemActor(resolvedScope);
-
-  const alert = await AlertsService.createAlert({
+  const alertPayload = {
     companyId: Number(resolvedScope.id),
     userId: actor.id || null,
+    driverId: payload.driverId || null,
+    tripId: payload.tripId || null,
+    tripNoteId: payload.tripNoteId || null,
     nfNumber: payload.invoiceNumber || payload.nfNumber || null,
+    dedupeKey: payload.dedupeKey || null,
     code: payload.code,
     title: payload.title,
     message: payload.message,
     severity: payload.severity || 'WARNING',
     metadata: payload.metadata || null,
-  });
+  };
+  const alert = alertPayload.dedupeKey
+    ? await AlertsService.upsertOpenAlert(alertPayload)
+    : await AlertsService.createAlert(alertPayload);
 
   return {
     created: true,
@@ -475,6 +515,7 @@ module.exports = {
       };
     }
 
+    const invoiceNumber = normalizeInvoiceNumber(payload.invoiceNumber || payload.nfNumber);
     const companyScope = payload.companyId
       ? {
         id: Number(payload.companyId),
@@ -482,8 +523,100 @@ module.exports = {
         source: 'payload',
       }
       : await resolveCompanyScopeFromLookup(payload.lookup || null);
+    const deliveryContext = invoiceNumber && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+      ? await resolveDeliveryContext(invoiceNumber, Number(companyScope.id))
+      : {
+        tripId: null,
+        tripNoteId: null,
+        driverId: null,
+      };
 
-    return createAlertInBackend(payload, companyScope);
+    const dedupeKey = payload.dedupeKey
+      || (
+        normalizeText(payload.metadata && payload.metadata.source).toLowerCase() === 'whatsapp'
+          ? buildWhatsappAlertDedupeKey(payload.code, payload.metadata)
+          : ''
+      );
+
+    return createAlertInBackend(Object.assign({}, payload, {
+      invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
+      driverId: payload.driverId || deliveryContext.driverId || null,
+      tripId: payload.tripId || deliveryContext.tripId || null,
+      tripNoteId: payload.tripNoteId || deliveryContext.tripNoteId || null,
+      dedupeKey: dedupeKey || null,
+    }), companyScope);
+  },
+
+  async createWhatsappOperationalAlert(payload = {}) {
+    const invoiceNumber = normalizeInvoiceNumber(payload.invoiceNumber || payload.nfNumber);
+    const metadata = Object.assign({}, payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}, {
+      source: 'whatsapp',
+      sourceName: payload.metadata && payload.metadata.sourceName ? payload.metadata.sourceName : 'whatsapp',
+      backendMode: payload.metadata && payload.metadata.backendMode
+        ? payload.metadata.backendMode
+        : env.receiptBackendSyncMode,
+    });
+
+    return this.createReceiptAlert(Object.assign({}, payload, {
+      invoiceNumber: invoiceNumber || null,
+      metadata,
+      dedupeKey: payload.dedupeKey || buildWhatsappAlertDedupeKey(payload.code, metadata) || null,
+    }));
+  },
+
+  async recordWhatsappSuccessActivity(payload = {}) {
+    if (!isRealBackendSyncEnabled()) {
+      return {
+        created: false,
+        skipped: true,
+        mode: 'mock',
+        reason: 'backend_sync_disabled',
+      };
+    }
+
+    const invoiceNumber = normalizeInvoiceNumber(payload.invoiceNumber || payload.nfNumber);
+    if (!invoiceNumber) {
+      return {
+        created: false,
+        skipped: true,
+        mode: 'backend_service',
+        reason: 'missing_invoice_number',
+      };
+    }
+
+    const lookup = payload.lookup || await findInvoiceInBackendDb(invoiceNumber);
+    const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
+    const deliveryContext = payload.deliveryContext || await resolveDeliveryContext(invoiceNumber, Number(companyScope.id));
+    const { ReceiptWhatsappActivityService } = await loadBackendContext();
+    const metadata = Object.assign({}, payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}, {
+      source: 'whatsapp',
+      sourceName: payload.metadata && payload.metadata.sourceName ? payload.metadata.sourceName : 'whatsapp',
+      summaryMessage: payload.summaryMessage || buildWhatsappSuccessSummary(invoiceNumber, payload.metadata),
+    });
+
+    const result = await ReceiptWhatsappActivityService.recordSuccessActivity({
+      companyId: Number(companyScope.id),
+      invoiceNumber,
+      tripId: deliveryContext.tripId,
+      tripNoteId: deliveryContext.tripNoteId,
+      driverId: deliveryContext.driverId,
+      sourceMessageId: payload.sourceMessageId || metadata.messageId || null,
+      occurredAt: payload.occurredAt || metadata.messageTimestamp || metadata.messageDate || new Date(),
+      groupId: payload.groupId || metadata.groupId || null,
+      groupName: payload.groupName || metadata.groupName || null,
+      senderPhone: payload.senderPhone || metadata.senderPhone || null,
+      senderName: payload.senderName || metadata.senderName || metadata.sender || null,
+      senderContactName: payload.senderContactName || metadata.senderContactName || null,
+      backendAction: payload.backendAction || 'mark_invoice_delivered',
+      backendMode: payload.backendMode || env.receiptBackendSyncMode,
+      classification: payload.classification || 'valid',
+      metadata,
+    });
+
+    return Object.assign({
+      mode: 'backend_service',
+      deliveryContext,
+    }, result);
   },
 
   async syncAnalysisResult(analysis = {}, options = {}) {
@@ -514,6 +647,7 @@ module.exports = {
 
     if (syncAction.type === 'mark_delivered') {
       const companyScope = await resolveCompanyScopeFromLookup(lookup);
+      const deliveryContext = await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id));
       const upload = syncAction.uploadReceipt
         ? await uploadReceiptEvidence({
           invoiceNumber: syncAction.invoiceNumber,
@@ -530,6 +664,26 @@ module.exports = {
       const update = await updateInvoiceStatusInBackend(syncAction.invoiceNumber, {
         deliveryStatus: 'delivered',
       }, companyScope);
+      const activity = await this.recordWhatsappSuccessActivity({
+        invoiceNumber: syncAction.invoiceNumber,
+        lookup,
+        companyScope,
+        deliveryContext,
+        sourceMessageId: options.metadata && options.metadata.messageId,
+        occurredAt: options.metadata && options.metadata.messageTimestamp,
+        groupId: options.metadata && options.metadata.groupId,
+        groupName: options.metadata && options.metadata.groupName,
+        senderPhone: options.metadata && options.metadata.senderPhone,
+        senderName: options.metadata && options.metadata.senderName,
+        senderContactName: options.metadata && options.metadata.senderContactName,
+        backendAction: 'mark_invoice_delivered',
+        backendMode: syncMode,
+        classification: normalizeClassification(analysis),
+        metadata: Object.assign({}, options.metadata || {}, {
+          backendAction: 'mark_invoice_delivered',
+          backendMode: syncMode,
+        }),
+      });
 
       return {
         mode: syncMode,
@@ -537,6 +691,7 @@ module.exports = {
         lookup,
         upload,
         update,
+        activity,
       };
     }
 
@@ -548,6 +703,10 @@ module.exports = {
     const alert = await this.createReceiptAlert(Object.assign({}, alertPayload, {
       invoiceNumber: syncAction.invoiceNumber,
       lookup,
+      metadata: Object.assign({}, alertPayload.metadata || {}, {
+        backendAction: 'create_receipt_alert',
+        backendMode: syncMode,
+      }),
     }));
 
     return {

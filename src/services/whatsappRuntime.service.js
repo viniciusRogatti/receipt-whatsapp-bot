@@ -16,6 +16,11 @@ const {
 
 let activeClient = null;
 
+const extractPhoneDigits = (value) => {
+  const match = String(value || '').match(/^(\d+)(?:@|$)/);
+  return match ? match[1] : null;
+};
+
 const sanitizeSegment = (value, fallback = 'group') => {
   const normalized = String(value || '')
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
@@ -86,8 +91,36 @@ const listAvailableGroups = async (client) => {
   });
 };
 
-const buildMessageContext = (message, chat) => {
+const buildMessageContext = async (message, chat) => {
   const timestamp = Number(message.timestamp || 0);
+  let contact = null;
+
+  if (typeof message.getContact === 'function') {
+    try {
+      contact = await message.getContact();
+    } catch (error) {
+      logger.debug('Nao foi possivel resolver o contato do remetente no WhatsApp.', {
+        chatId: message.from,
+        error: error.message,
+      });
+    }
+  }
+
+  const senderId = message.author
+    || (contact && contact.id && contact.id._serialized ? contact.id._serialized : null)
+    || message._data && message._data.author
+    || message._data && message._data.from
+    || null;
+  const senderPhone = contact && contact.number
+    ? String(contact.number)
+    : extractPhoneDigits(senderId);
+  const senderContactName = contact && (contact.name || contact.shortName)
+    ? String(contact.name || contact.shortName)
+    : null;
+  const senderName = contact && contact.pushname
+    ? String(contact.pushname)
+    : (message._data && message._data.notifyName ? String(message._data.notifyName) : null);
+  const sender = senderContactName || senderName || senderPhone || senderId || null;
 
   return {
     id: message.id && message.id._serialized ? message.id._serialized : String(message.id || ''),
@@ -96,7 +129,11 @@ const buildMessageContext = (message, chat) => {
     groupName: chat && chat.name ? chat.name : null,
     chatId: message.from,
     mediaId: message._data && message._data.id ? message._data.id.id : null,
-    sender: message.author || message._data && message._data.notifyName || message._data && message._data.from || null,
+    sender,
+    senderId,
+    senderPhone,
+    senderName,
+    senderContactName,
     timestamp: timestamp > 0 ? timestamp * 1000 : null,
   };
 };
@@ -145,7 +182,7 @@ const handleIncomingMedia = async (message, chat) => {
     return;
   }
 
-  const messageContext = buildMessageContext(message, chat);
+  const messageContext = await buildMessageContext(message, chat);
   const mediaPath = await downloadImageToDisk(messageContext, media);
 
   try {

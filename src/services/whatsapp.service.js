@@ -50,6 +50,10 @@ const buildMessageMetadata = (message = {}) => ({
   messageId: message.id || null,
   mediaId: message.mediaId || null,
   sender: message.sender || null,
+  senderId: message.senderId || null,
+  senderPhone: message.senderPhone || null,
+  senderName: message.senderName || null,
+  senderContactName: message.senderContactName || null,
   messageTimestamp: message.timestamp || null,
 });
 
@@ -65,73 +69,114 @@ module.exports = {
   },
 
   async handleIncomingImageMessage({ message, mediaPath, reply, outputDir }) {
-    if (env.receiptAsyncWhatsappMode) {
-      const ingestResult = await receiptIngestionService.ingestReceipt({
-        payload: {
-          companyId: message && message.companyId ? message.companyId : undefined,
-          documentType: 'delivery_receipt',
-          metadata: {
-            groupId: message && message.groupId ? message.groupId : null,
-            messageId: message && message.id ? message.id : null,
-            sender: message && message.sender ? message.sender : null,
+    try {
+      const messageMetadata = buildMessageMetadata(message);
+
+      if (env.receiptAsyncWhatsappMode) {
+        const ingestResult = await receiptIngestionService.ingestReceipt({
+          payload: {
+            companyId: message && message.companyId ? message.companyId : undefined,
+            documentType: 'delivery_receipt',
+            metadata: {
+              groupId: message && message.groupId ? message.groupId : null,
+              messageId: message && message.id ? message.id : null,
+              sender: message && message.sender ? message.sender : null,
+              senderId: message && message.senderId ? message.senderId : null,
+              senderPhone: message && message.senderPhone ? message.senderPhone : null,
+              senderName: message && message.senderName ? message.senderName : null,
+              senderContactName: message && message.senderContactName ? message.senderContactName : null,
+            },
           },
-        },
-        headers: {},
-        uploadedFile: {
-          path: mediaPath,
-          originalName: path.basename(mediaPath || 'receipt.jpg'),
-        },
-        sourceHint: 'whatsapp',
+          headers: {},
+          uploadedFile: {
+            path: mediaPath,
+            originalName: path.basename(mediaPath || 'receipt.jpg'),
+          },
+          sourceHint: 'whatsapp',
+        });
+
+        return {
+          queued: true,
+          replied: false,
+          replyMessage: null,
+          ingestion: ingestResult,
+        };
+      }
+
+      const analysis = await receiptAnalysisService.analyzeImage({
+        imagePath: mediaPath,
+        outputDir: outputDir || path.join(process.cwd(), 'outputs', 'whatsapp'),
       });
+      let backendSync = null;
+      let backendSyncError = null;
+
+      try {
+        backendSync = await apiService.syncAnalysisResult(analysis, {
+          imagePath: mediaPath,
+          metadata: messageMetadata,
+        });
+      } catch (error) {
+        backendSyncError = error;
+
+        await apiService.createWhatsappOperationalAlert({
+          code: 'RECEIPT_WHATSAPP_SYNC_FAILURE',
+          title: 'Falha ao sincronizar canhoto vindo do WhatsApp',
+          message: `O bot leu a imagem recebida em ${messageMetadata.groupName || messageMetadata.groupId || 'grupo desconhecido'}, mas nao conseguiu atualizar o backend.`,
+          severity: 'CRITICAL',
+          invoiceNumber: analysis && analysis.nfExtraction ? analysis.nfExtraction.nf : null,
+          metadata: Object.assign({}, messageMetadata, {
+            backendAction: 'mark_invoice_delivered',
+            backendMode: env.receiptBackendSyncMode,
+            classification: analysis && analysis.classification ? analysis.classification.classification : null,
+            reasons: analysis && analysis.classification && Array.isArray(analysis.classification.reasons)
+              ? analysis.classification.reasons
+              : [],
+            errorMessage: error.message,
+          }),
+        }).catch(() => undefined);
+      }
+
+      let replyMessage = buildReplyMessage(analysis);
+      if (
+        !replyMessage
+        && backendSyncError
+        && env.whatsappReplyOnOperationalFailure
+      ) {
+        replyMessage = buildOperationalFailureReplyMessage();
+      }
+
+      let replied = false;
+      if (replyMessage && typeof reply === 'function') {
+        replied = !!(await reply(replyMessage, message));
+      }
 
       return {
-        queued: true,
-        replied: false,
-        replyMessage: null,
-        ingestion: ingestResult,
+        analysis,
+        backendSync,
+        backendSyncError: backendSyncError
+          ? {
+            message: backendSyncError.message,
+          }
+          : null,
+        replied,
+        replyMessage,
       };
-    }
-
-    const analysis = await receiptAnalysisService.analyzeImage({
-      imagePath: mediaPath,
-      outputDir: outputDir || path.join(process.cwd(), 'outputs', 'whatsapp'),
-    });
-    let backendSync = null;
-    let backendSyncError = null;
-
-    try {
-      backendSync = await apiService.syncAnalysisResult(analysis, {
-        imagePath: mediaPath,
-        metadata: buildMessageMetadata(message),
-      });
     } catch (error) {
-      backendSyncError = error;
-    }
+      const messageMetadata = buildMessageMetadata(message);
 
-    let replyMessage = buildReplyMessage(analysis);
-    if (
-      !replyMessage
-      && backendSyncError
-      && env.whatsappReplyOnOperationalFailure
-    ) {
-      replyMessage = buildOperationalFailureReplyMessage();
-    }
+      await apiService.createWhatsappOperationalAlert({
+        code: 'RECEIPT_WHATSAPP_PROCESSING_FAILURE',
+        title: 'Falha ao processar imagem vinda do WhatsApp',
+        message: `O bot nao conseguiu concluir o processamento da imagem recebida em ${messageMetadata.groupName || messageMetadata.groupId || 'grupo desconhecido'}.`,
+        severity: 'WARNING',
+        metadata: Object.assign({}, messageMetadata, {
+          backendAction: 'process_receipt_image',
+          backendMode: env.receiptBackendSyncMode,
+          errorMessage: error.message,
+        }),
+      }).catch(() => undefined);
 
-    let replied = false;
-    if (replyMessage && typeof reply === 'function') {
-      replied = !!(await reply(replyMessage, message));
+      throw error;
     }
-
-    return {
-      analysis,
-      backendSync,
-      backendSyncError: backendSyncError
-        ? {
-          message: backendSyncError.message,
-        }
-        : null,
-      replied,
-      replyMessage,
-    };
   },
 };
