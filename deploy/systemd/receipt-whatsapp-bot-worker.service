@@ -1,0 +1,24 @@
+[Unit]
+Description=receipt-whatsapp-bot worker
+After=network-online.target receipt-whatsapp-bot-redis.service
+Wants=network-online.target
+Requires=receipt-whatsapp-bot-redis.service
+
+[Service]
+Type=simple
+User=kpbot
+Group=kpbot
+WorkingDirectory=/opt/kptransportes/apps/receipt-whatsapp-bot
+Environment=HOME=/home/kpbot
+ExecStart=/usr/bin/node src/worker.js
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/kptransportes/apps/receipt-whatsapp-bot
+
+[Install]
+WantedBy=multi-user.target

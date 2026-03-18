@@ -247,8 +247,11 @@ Variaveis principais:
 - `OCR_NF_EXPECTED_LENGTHS`: tamanhos aceitos para a NF. No fluxo atual da MAR E RIO, use `7`
 - `OCR_SUPPRESS_CONSOLE_NOISE`: remove o ruido verboso do Tesseract no terminal
 - `RECEIPT_PROFILE_ID`: perfil ativo do canhoto. O projeto sai com `mar_e_rio`, mas a arquitetura agora permite adicionar outros perfis por empresa
-- `RECEIPT_INVOICE_LOOKUP_MODE`: `auto`, `backend_db`, `mock` ou `disabled`
+- `RECEIPT_INVOICE_LOOKUP_MODE`: `auto`, `backend_db`, `backend_api`, `mock` ou `disabled`
 - `RECEIPT_INVOICE_LOOKUP_COMPANY_CODE`: empresa consultada no banco, por padrao `mar_e_rio`
+- `RECEIPT_BACKEND_API_BASE_URL`: URL do backend HTTP remoto, por exemplo Railway
+- `RECEIPT_BACKEND_API_TOKEN`: token tecnico para autenticar o bot no backend remoto
+- `RECEIPT_BACKEND_API_TIMEOUT_MS`: timeout das chamadas HTTP do bot para o backend remoto
 - `RECEIPT_BACKEND_SYNC_MODE`: `mock`, `full`, `status_only`, `alerts_only` ou `disabled`
 - `RECEIPT_LOCAL_FAST_MODE`: ativa o fluxo rapido no `test:local`
 - `RECEIPT_LOCAL_REPORT_ONLY`: imprime apenas o relatorio final no lote local
@@ -648,19 +651,22 @@ O fluxo agora tem integracao real com WhatsApp Web:
 
 Fluxo recomendado para uso em grupo:
 
-1. configure `RECEIPT_ASYNC_WHATSAPP_MODE=false`
-2. configure `RECEIPT_BACKEND_SYNC_MODE=full` para subir canhoto + marcar a NF como `delivered`
-3. se quiser testar sem subir o arquivo do canhoto no backend, use `RECEIPT_BACKEND_SYNC_MODE=status_only`
-4. autentique o bot com um telefone que ja participa do grupo alvo
-5. opcionalmente restrinja o teste com `WHATSAPP_ALLOWED_GROUP_IDS` ou `WHATSAPP_ALLOWED_GROUP_NAMES`
-6. rode `npm run whatsapp`
+1. configure `RECEIPT_ASYNC_WHATSAPP_MODE=true`
+2. configure `RECEIPT_INVOICE_LOOKUP_MODE=backend_api`
+3. configure `RECEIPT_BACKEND_API_BASE_URL` e `RECEIPT_BACKEND_API_TOKEN`
+4. configure `RECEIPT_BACKEND_SYNC_MODE=status_only` para marcar a NF como `delivered`
+5. se quiser somente alertas sem alterar status, use `RECEIPT_BACKEND_SYNC_MODE=alerts_only`
+6. se quiser reduzir risco de bloqueio, configure `WHATSAPP_REPLY_ENABLED=false`
+7. autentique o bot com um telefone que ja participa do grupo alvo
+8. opcionalmente restrinja o teste com `WHATSAPP_ALLOWED_GROUP_IDS` ou `WHATSAPP_ALLOWED_GROUP_NAMES`
+9. rode `npm run whatsapp` e `npm run worker`
 
 Comportamento atual:
 
 - imagem valida: o bot nao responde no grupo e sincroniza o backend
 - imagem `review` ou `invalid`: o bot responde pedindo nova foto e cria alerta operacional
 - falha apos leitura valida: o bot responde informando que leu a imagem, mas nao conseguiu registrar no sistema
-- `RECEIPT_ASYNC_WHATSAPP_MODE=true`: o bot apenas enfileira a imagem; resposta no grupo apos o worker ainda nao existe nesse modo
+- `RECEIPT_ASYNC_WHATSAPP_MODE=true`: o bot enfileira a imagem e o worker faz a sincronizacao operacional com o backend
 
 ## Integracao com API
 
@@ -675,7 +681,19 @@ Hoje o servico suporta:
 
 - `mock`, para desenvolvimento local puro
 - `backend_db`, consultando diretamente a base do backend
-- `auto`, tentando `backend_db` primeiro e caindo para `mock` se necessario
+- `backend_api`, chamando endpoints HTTP autenticados do backend remoto
+- `auto`, usando `backend_api` se `RECEIPT_BACKEND_API_BASE_URL` estiver configurado; caso contrario tenta `backend_db` e cai para `mock` se necessario
+
+No modo `backend_api`, o bot usa:
+
+- `GET /api/receipt-bot/danfes/nf/:id` para lookup da NF
+- `PUT /api/receipt-bot/danfes/status` para marcar a DANFE como entregue
+- `POST /api/receipt-bot/alerts` para criar alertas operacionais no painel
+
+No backend, configure:
+
+- `RECEIPT_BOT_SERVICE_TOKEN`: token tecnico que o bot enviara no header `x-receipt-bot-token`
+- `RECEIPT_BOT_DEFAULT_COMPANY_CODE` ou `RECEIPT_BOT_DEFAULT_COMPANY_ID`: escopo padrao da empresa se o bot nao enviar override
 
 Na sincronizacao operacional:
 
