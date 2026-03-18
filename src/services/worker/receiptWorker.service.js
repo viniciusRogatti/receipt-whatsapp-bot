@@ -35,6 +35,11 @@ module.exports = {
           correlationId,
         },
       });
+      const invoiceField = result.extraction
+        && result.extraction.parsedDocument
+        && result.extraction.parsedDocument.fields
+        ? result.extraction.parsedDocument.fields.invoiceNumber
+        : null;
 
       await processingStateRepository.markCompleted(job.id, {
         attemptCount,
@@ -52,7 +57,9 @@ module.exports = {
         jobId: job.id,
         correlationId,
         providerId: result.extraction.providerId,
+        invoiceNumber: invoiceField && invoiceField.value ? String(invoiceField.value).trim() : null,
         classification: result.decision.classification,
+        backendAction: result.backendSync ? result.backendSync.action : null,
       });
       return result;
     } catch (error) {

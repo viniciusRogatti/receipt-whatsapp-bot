@@ -10,6 +10,10 @@ const {
   normalizeInvoiceNumber,
   resolveSyncAction,
 } = require('./backendSyncSupport.service');
+const {
+  buildAnalysisFromProcessingResult,
+  buildMetadataFromCanonicalRequest,
+} = require('./backendSyncPayloadAdapter.service');
 
 const MOCK_INVOICE_DATABASE = {};
 const REAL_BACKEND_SYNC_MODES = new Set(['full', 'status_only', 'alerts_only']);
@@ -18,6 +22,12 @@ let backendContextPromise = null;
 let resolvedCompanyPromise = null;
 
 const normalizeText = (value) => String(value || '').trim();
+const isRemoteBackendApiEnabled = () => !!normalizeText(env.receiptBackendApiBaseUrl);
+const resolveBackendTransportMode = () => (
+  isRemoteBackendApiEnabled()
+    ? 'backend_api'
+    : 'backend_service'
+);
 
 const toDateOnly = (value) => {
   if (!value && value !== 0) return null;
@@ -43,6 +53,82 @@ const toDateOnly = (value) => {
 };
 
 const isRealBackendSyncEnabled = () => REAL_BACKEND_SYNC_MODES.has(env.receiptBackendSyncMode);
+
+const buildBackendApiHeaders = ({
+  includeJsonContentType = true,
+} = {}) => {
+  const token = normalizeText(env.receiptBackendApiToken);
+  if (!token) {
+    throw new Error('RECEIPT_BACKEND_API_TOKEN nao configurado para sincronizar com o backend remoto.');
+  }
+
+  const headers = {
+    accept: 'application/json',
+    'x-receipt-bot-token': token,
+  };
+
+  if (includeJsonContentType) {
+    headers['content-type'] = 'application/json';
+  }
+
+  if (Number.isFinite(env.receiptInvoiceLookupCompanyId) && env.receiptInvoiceLookupCompanyId > 0) {
+    headers['x-company-id'] = String(env.receiptInvoiceLookupCompanyId);
+  } else if (normalizeText(env.receiptInvoiceLookupCompanyCode)) {
+    headers['x-company-code'] = normalizeText(env.receiptInvoiceLookupCompanyCode);
+  }
+
+  return headers;
+};
+
+const parseJsonSafe = (value) => {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const requestBackendApi = async (relativePath, {
+  method = 'GET',
+  body = null,
+} = {}) => {
+  if (!isRemoteBackendApiEnabled()) {
+    throw new Error('RECEIPT_BACKEND_API_BASE_URL nao configurado.');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), env.receiptBackendApiTimeoutMs);
+  const url = `${env.receiptBackendApiBaseUrl}${relativePath}`;
+
+  try {
+    const response = await fetch(url, {
+      method,
+      headers: buildBackendApiHeaders({
+        includeJsonContentType: body !== null,
+      }),
+      body: body === null ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    const rawText = await response.text();
+    const payload = rawText ? parseJsonSafe(rawText) : null;
+
+    if (!response.ok) {
+      const error = new Error(
+        payload && payload.message
+          ? payload.message
+          : `Falha HTTP ${response.status} ao chamar ${relativePath}.`,
+      );
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+
+    return payload && typeof payload === 'object' ? payload : {};
+  } finally {
+    clearTimeout(timeout);
+  }
+};
 
 const getBackendRequire = () => createRequire(path.join(env.backendRoot, 'package.json'));
 
@@ -169,6 +255,22 @@ const resolveCompanyScopeFromLookup = async (lookup = null) => {
     };
   }
 
+  if (isRemoteBackendApiEnabled()) {
+    if (Number.isFinite(env.receiptInvoiceLookupCompanyId) && env.receiptInvoiceLookupCompanyId > 0) {
+      return {
+        id: env.receiptInvoiceLookupCompanyId,
+        code: env.receiptInvoiceLookupCompanyCode || null,
+        source: 'config_id',
+      };
+    }
+
+    return {
+      id: null,
+      code: env.receiptInvoiceLookupCompanyCode || null,
+      source: env.receiptInvoiceLookupCompanyCode ? 'config_code' : 'unscoped',
+    };
+  }
+
   const { Company } = await loadBackendContext();
   return resolveCompanyScope(Company);
 };
@@ -226,6 +328,49 @@ const findInvoiceInBackendDb = async (invoiceNumber) => {
     reason: invoice ? 'invoice_found' : 'invoice_not_found',
     company: companyScope,
   };
+};
+
+const findInvoiceInBackendApi = async (invoiceNumber) => {
+  const key = normalizeInvoiceNumber(invoiceNumber);
+
+  if (!key) {
+    return {
+      found: false,
+      invoice: null,
+      mode: 'backend_api',
+      reason: 'missing_invoice_number',
+      company: null,
+    };
+  }
+
+  const payload = await requestBackendApi(`/api/receipt-bot/danfes/nf/${encodeURIComponent(key)}`);
+
+  return {
+    found: !!payload.found,
+    invoice: payload.invoice || null,
+    mode: 'backend_api',
+    reason: payload.reason || (payload.found ? 'invoice_found' : 'invoice_not_found'),
+    company: payload.company || null,
+  };
+};
+
+const findInvoiceInConfiguredBackend = async (invoiceNumber, { throwOnError = false } = {}) => {
+  try {
+    return isRemoteBackendApiEnabled()
+      ? await findInvoiceInBackendApi(invoiceNumber)
+      : await findInvoiceInBackendDb(invoiceNumber);
+  } catch (error) {
+    if (throwOnError) throw error;
+
+    return {
+      found: false,
+      invoice: null,
+      mode: resolveBackendTransportMode(),
+      reason: 'lookup_error',
+      error: error.message,
+      company: null,
+    };
+  }
 };
 
 const resolveDeliveryContext = async (invoiceNumber, companyId) => {
@@ -384,6 +529,36 @@ const updateInvoiceStatusInBackend = async (invoiceNumber, payload = {}, company
   };
 };
 
+const updateInvoiceStatusInBackendApi = async (invoiceNumber, payload = {}) => {
+  const key = normalizeInvoiceNumber(invoiceNumber);
+  if (!key) {
+    return {
+      updated: false,
+      mode: 'backend_api',
+      reason: 'missing_invoice_number',
+    };
+  }
+
+  const deliveryStatus = normalizeText(payload.deliveryStatus || 'delivered').toLowerCase() || 'delivered';
+  const response = await requestBackendApi('/api/receipt-bot/danfes/status', {
+    method: 'PUT',
+    body: {
+      invoiceNumber: key,
+      status: deliveryStatus,
+    },
+  });
+
+  return Object.assign({
+    updated: true,
+    mode: 'backend_api',
+    invoice: {
+      invoiceNumber: key,
+      deliveryStatus,
+      updatedAt: new Date().toISOString(),
+    },
+  }, response && typeof response === 'object' ? response : {});
+};
+
 const createAlertInBackend = async (payload = {}, companyScope) => {
   const { AlertsService } = await loadBackendContext();
   const resolvedScope = companyScope && companyScope.id
@@ -415,6 +590,29 @@ const createAlertInBackend = async (payload = {}, companyScope) => {
   };
 };
 
+const createAlertInBackendApi = async (payload = {}) => {
+  const response = await requestBackendApi('/api/receipt-bot/alerts', {
+    method: 'POST',
+    body: {
+      invoiceNumber: payload.invoiceNumber || payload.nfNumber || null,
+      driverId: payload.driverId || null,
+      tripId: payload.tripId || null,
+      tripNoteId: payload.tripNoteId || null,
+      dedupeKey: payload.dedupeKey || null,
+      code: payload.code,
+      title: payload.title,
+      message: payload.message,
+      severity: payload.severity || 'WARNING',
+      metadata: payload.metadata || null,
+    },
+  });
+
+  return Object.assign({
+    created: true,
+    mode: 'backend_api',
+  }, response && typeof response === 'object' ? response : {});
+};
+
 module.exports = {
   async findInvoiceByNumber(invoiceNumber) {
     const lookupMode = env.receiptInvoiceLookupMode;
@@ -442,18 +640,39 @@ module.exports = {
       return findInvoiceInMockDatabase(key);
     }
 
-    if (lookupMode === 'backend_db' || lookupMode === 'auto') {
+    if (lookupMode === 'backend_db') {
       try {
         return await findInvoiceInBackendDb(key);
       } catch (error) {
-        if (lookupMode === 'backend_db') {
-          return {
-            found: false,
-            invoice: null,
-            mode: 'backend_db',
-            reason: 'lookup_error',
-            error: error.message,
-          };
+        return {
+          found: false,
+          invoice: null,
+          mode: 'backend_db',
+          reason: 'lookup_error',
+          error: error.message,
+          company: null,
+        };
+      }
+    }
+
+    if (lookupMode === 'backend_api') {
+      return findInvoiceInConfiguredBackend(key, { throwOnError: false });
+    }
+
+    if (lookupMode === 'auto') {
+      if (isRemoteBackendApiEnabled()) {
+        const lookup = await findInvoiceInConfiguredBackend(key, { throwOnError: false });
+        if (lookup.reason !== 'lookup_error') {
+          return Object.assign({}, lookup, {
+            mode: lookup.mode === 'backend_api' ? 'backend_api' : lookup.mode,
+          });
+        }
+      } else {
+        const lookup = await findInvoiceInConfiguredBackend(key, { throwOnError: false });
+        if (lookup.reason !== 'lookup_error') {
+          return Object.assign({}, lookup, {
+            mode: lookup.mode === 'backend_db' ? 'backend_db' : lookup.mode,
+          });
         }
       }
     }
@@ -461,7 +680,7 @@ module.exports = {
     const fallback = await findInvoiceInMockDatabase(key);
     return Object.assign({}, fallback, {
       mode: lookupMode === 'auto' ? 'auto_mock_fallback' : fallback.mode,
-      fallbackFrom: 'backend_db',
+      fallbackFrom: isRemoteBackendApiEnabled() ? 'backend_api' : 'backend_db',
     });
   },
 
@@ -492,6 +711,10 @@ module.exports = {
         mode: 'mock',
         invoice: MOCK_INVOICE_DATABASE[key],
       };
+    }
+
+    if (isRemoteBackendApiEnabled()) {
+      return updateInvoiceStatusInBackendApi(invoiceNumber, payload);
     }
 
     const lookup = await findInvoiceInBackendDb(invoiceNumber);
@@ -538,6 +761,13 @@ module.exports = {
           : ''
       );
 
+    if (isRemoteBackendApiEnabled()) {
+      return createAlertInBackendApi(Object.assign({}, payload, {
+        invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
+        dedupeKey: dedupeKey || null,
+      }));
+    }
+
     return createAlertInBackend(Object.assign({}, payload, {
       invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
       driverId: payload.driverId || deliveryContext.driverId || null,
@@ -571,6 +801,15 @@ module.exports = {
         skipped: true,
         mode: 'mock',
         reason: 'backend_sync_disabled',
+      };
+    }
+
+    if (isRemoteBackendApiEnabled()) {
+      return {
+        created: false,
+        skipped: true,
+        mode: 'backend_api',
+        reason: 'activity_endpoint_not_configured',
       };
     }
 
@@ -626,7 +865,7 @@ module.exports = {
 
     if (invoiceNumber) {
       lookup = isRealBackendSyncEnabled()
-        ? await findInvoiceInBackendDb(invoiceNumber)
+        ? await findInvoiceInConfiguredBackend(invoiceNumber, { throwOnError: true })
         : (analysis.invoiceLookup || await this.findInvoiceByNumber(invoiceNumber));
     }
 
@@ -646,24 +885,46 @@ module.exports = {
     }
 
     if (syncAction.type === 'mark_delivered') {
-      const companyScope = await resolveCompanyScopeFromLookup(lookup);
-      const deliveryContext = await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id));
+      const companyScope = isRemoteBackendApiEnabled()
+        ? null
+        : await resolveCompanyScopeFromLookup(lookup);
+      const deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+        ? await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id))
+        : {
+          tripId: null,
+          tripNoteId: null,
+          driverId: null,
+          tripDate: null,
+        };
       const upload = syncAction.uploadReceipt
-        ? await uploadReceiptEvidence({
-          invoiceNumber: syncAction.invoiceNumber,
-          imagePath: options.imagePath,
-          companyScope,
-          metadata: options.metadata || {},
-        })
+        ? (
+          isRemoteBackendApiEnabled()
+            ? {
+              uploaded: false,
+              skipped: true,
+              mode: 'backend_api',
+              reason: 'remote_upload_not_supported',
+            }
+            : await uploadReceiptEvidence({
+              invoiceNumber: syncAction.invoiceNumber,
+              imagePath: options.imagePath,
+              companyScope,
+              metadata: options.metadata || {},
+            })
+        )
         : {
           uploaded: false,
           skipped: true,
-          mode: 'backend_service',
+          mode: resolveBackendTransportMode(),
           reason: 'sync_mode_status_only',
         };
-      const update = await updateInvoiceStatusInBackend(syncAction.invoiceNumber, {
-        deliveryStatus: 'delivered',
-      }, companyScope);
+      const update = isRemoteBackendApiEnabled()
+        ? await updateInvoiceStatusInBackendApi(syncAction.invoiceNumber, {
+          deliveryStatus: 'delivered',
+        })
+        : await updateInvoiceStatusInBackend(syncAction.invoiceNumber, {
+          deliveryStatus: 'delivered',
+        }, companyScope);
       const activity = await this.recordWhatsappSuccessActivity({
         invoiceNumber: syncAction.invoiceNumber,
         lookup,
@@ -716,6 +977,19 @@ module.exports = {
       lookup,
       alert,
     };
+  },
+
+  async syncProcessingResult(processingResult = {}, options = {}) {
+    const analysis = buildAnalysisFromProcessingResult(processingResult);
+    const metadata = Object.assign(
+      {},
+      buildMetadataFromCanonicalRequest(processingResult.request),
+      options.metadata && typeof options.metadata === 'object' ? options.metadata : {},
+    );
+
+    return this.syncAnalysisResult(analysis, Object.assign({}, options, {
+      metadata,
+    }));
   },
 
   async shutdown() {

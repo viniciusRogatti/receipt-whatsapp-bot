@@ -198,6 +198,14 @@ const env = {
     process.env.RECEIPT_INVOICE_LOOKUP_BACKEND_ENV_PATH,
     '../../backend/.env',
   ),
+  receiptBackendApiBaseUrl: String(
+    process.env.RECEIPT_BACKEND_API_BASE_URL || '',
+  ).trim().replace(/\/+$/, ''),
+  receiptBackendApiToken: String(process.env.RECEIPT_BACKEND_API_TOKEN || '').trim(),
+  receiptBackendApiTimeoutMs: Math.max(
+    1000,
+    Number(process.env.RECEIPT_BACKEND_API_TIMEOUT_MS || 15000),
+  ),
   receiptBackendSyncMode: String(process.env.RECEIPT_BACKEND_SYNC_MODE || 'mock').trim().toLowerCase(),
   receiptLocalFastMode: parseBoolean(process.env.RECEIPT_LOCAL_FAST_MODE, true),
   receiptLocalReportOnly: parseBoolean(process.env.RECEIPT_LOCAL_REPORT_ONLY, true),

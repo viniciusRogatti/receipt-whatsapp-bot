@@ -193,13 +193,17 @@ const handleIncomingMedia = async (message, chat) => {
       outputDir: path.join(process.cwd(), 'outputs', 'whatsapp', sanitizeSegment(messageContext.groupId, 'group')),
     });
 
-    logger.info('Mensagem de imagem processada no WhatsApp.', {
-      chatId: messageContext.chatId,
-      groupName: messageContext.groupName,
-      messageId: messageContext.id,
-      classification: result.analysis && result.analysis.classification
-        ? result.analysis.classification.classification
-        : null,
+      logger.info('Mensagem de imagem processada no WhatsApp.', {
+        chatId: messageContext.chatId,
+        groupName: messageContext.groupName,
+        messageId: messageContext.id,
+        jobId: result.ingestion ? result.ingestion.jobId || null : null,
+        invoiceNumber: result.analysis && result.analysis.nfExtraction
+          ? result.analysis.nfExtraction.nf || null
+          : null,
+        classification: result.analysis && result.analysis.classification
+          ? result.analysis.classification.classification
+          : null,
       replied: result.replied,
       backendAction: result.backendSync ? result.backendSync.action : null,
       backendSyncError: result.backendSyncError ? result.backendSyncError.message : null,

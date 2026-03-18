@@ -1,5 +1,6 @@
 const extractionOrchestrator = require('../extraction/documentExtractionOrchestrator.service');
 const assetStorageService = require('../ingestion/receiptAssetStorage.service');
+const apiService = require('../api.service');
 const profileResolver = require('./profileResolver.service');
 
 module.exports = {
@@ -16,7 +17,7 @@ module.exports = {
         context,
       });
 
-      return {
+      const result = {
         request: canonicalRequest,
         asset,
         context: {
@@ -42,6 +43,14 @@ module.exports = {
         decision: extraction.decision,
         completedAt: new Date().toISOString(),
       };
+
+      if (context.sourceProfile && context.sourceProfile.id === 'whatsapp') {
+        result.backendSync = await apiService.syncProcessingResult(result, {
+          imagePath: materializedAsset.filePath,
+        });
+      }
+
+      return result;
     } finally {
       if (materializedAsset && typeof materializedAsset.cleanup === 'function') {
         await materializedAsset.cleanup().catch(() => undefined);

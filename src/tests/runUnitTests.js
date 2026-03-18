@@ -14,6 +14,7 @@ const testModules = [
   require('./unit/imagePreprocess.test'),
   require('./unit/profileResolver.test'),
   require('./unit/backendSyncSupport.test'),
+  require('./unit/backendSyncPayloadAdapter.test'),
   require('./unit/whatsappRuntimeSupport.test'),
   require('./unit/fileJobQueue.test'),
   require('./unit/documentFieldParser.test'),
