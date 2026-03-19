@@ -57,6 +57,11 @@ module.exports = {
         jobId: job.id,
         correlationId,
         providerId: result.extraction.providerId,
+        providerAttempts: (result.extraction.attempts || []).map((attempt) => ({
+          providerId: attempt.providerId,
+          status: attempt.status,
+          reason: attempt.reason || null,
+        })),
         invoiceNumber: invoiceField && invoiceField.value ? String(invoiceField.value).trim() : null,
         classification: result.decision.classification,
         backendAction: result.backendSync ? result.backendSync.action : null,

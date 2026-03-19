@@ -1,4 +1,5 @@
 const providerRegistry = require('./extractionProviderRegistry.service');
+const env = require('../../config/env');
 const parserService = require('../processing/documentFieldParser.service');
 const decisionService = require('../processing/receiptDecision.service');
 
@@ -33,6 +34,10 @@ module.exports = {
     const primaryProviderId = strategy.primaryProvider;
     const fallbackProviders = Array.isArray(strategy.fallbackProviders) ? strategy.fallbackProviders : [];
     const migrationProviders = Array.isArray(strategy.migrationProviders) ? strategy.migrationProviders : [];
+    const allowLegacyOnFailure = !!(
+      strategy.allowLegacyOnFailure
+      && env.receiptLegacyFallbackEnabled
+    );
     const attempts = [];
 
     const runProvider = async (providerId) => {
@@ -91,7 +96,7 @@ module.exports = {
         };
       }
 
-      if (!primaryDecision.shouldTriggerFallback && !strategy.allowLegacyOnFailure) {
+      if (!primaryDecision.shouldTriggerFallback && !allowLegacyOnFailure) {
         return {
           selectedAttempt: primaryAttempt,
           attempts,
@@ -126,7 +131,7 @@ module.exports = {
       }
     }
 
-    if (strategy.allowLegacyOnFailure) {
+    if (allowLegacyOnFailure) {
       for (const providerId of migrationProviders) {
         const migrationAttempt = await runProvider(providerId);
         if (

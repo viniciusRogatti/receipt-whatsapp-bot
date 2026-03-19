@@ -173,6 +173,10 @@ const env = {
     1000,
     Number(process.env.RECEIPT_PROVIDER_OPENAI_TIMEOUT_MS || 25000),
   ),
+  receiptLegacyFallbackEnabled: parseBoolean(
+    process.env.RECEIPT_LEGACY_FALLBACK_ENABLED,
+    true,
+  ),
   ocrProbeEnabled: String(process.env.OCR_PROBE_ENABLED || 'true').toLowerCase() !== 'false',
   ocrProbeLang: process.env.OCR_PROBE_LANG || 'por',
   ocrProbeVariantLimit: Number(process.env.OCR_PROBE_VARIANT_LIMIT || 4),

@@ -739,6 +739,20 @@ module.exports = {
     }
 
     const invoiceNumber = normalizeInvoiceNumber(payload.invoiceNumber || payload.nfNumber);
+    const dedupeKey = payload.dedupeKey
+      || (
+        normalizeText(payload.metadata && payload.metadata.source).toLowerCase() === 'whatsapp'
+          ? buildWhatsappAlertDedupeKey(payload.code, payload.metadata)
+          : ''
+      );
+
+    if (isRemoteBackendApiEnabled()) {
+      return createAlertInBackendApi(Object.assign({}, payload, {
+        invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
+        dedupeKey: dedupeKey || null,
+      }));
+    }
+
     const companyScope = payload.companyId
       ? {
         id: Number(payload.companyId),
@@ -753,20 +767,6 @@ module.exports = {
         tripNoteId: null,
         driverId: null,
       };
-
-    const dedupeKey = payload.dedupeKey
-      || (
-        normalizeText(payload.metadata && payload.metadata.source).toLowerCase() === 'whatsapp'
-          ? buildWhatsappAlertDedupeKey(payload.code, payload.metadata)
-          : ''
-      );
-
-    if (isRemoteBackendApiEnabled()) {
-      return createAlertInBackendApi(Object.assign({}, payload, {
-        invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
-        dedupeKey: dedupeKey || null,
-      }));
-    }
 
     return createAlertInBackend(Object.assign({}, payload, {
       invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,

@@ -15,9 +15,11 @@ const testModules = [
   require('./unit/profileResolver.test'),
   require('./unit/backendSyncSupport.test'),
   require('./unit/backendSyncPayloadAdapter.test'),
+  require('./unit/apiService.test'),
   require('./unit/whatsappRuntimeSupport.test'),
   require('./unit/fileJobQueue.test'),
   require('./unit/documentFieldParser.test'),
+  require('./unit/documentExtractionOrchestrator.test'),
   require('./unit/processingStateRepository.test'),
   require('./unit/receiptAssetStorage.test'),
 ];
