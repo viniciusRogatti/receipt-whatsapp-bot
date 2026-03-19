@@ -2,12 +2,14 @@ const fs = require('fs');
 const path = require('path');
 const { createRequire } = require('module');
 const dotenv = require('dotenv');
+const sharp = require('sharp');
 const env = require('../config/env');
 const {
   buildAlertPayload,
   guessMimeTypeFromPath,
   normalizeClassification,
   normalizeInvoiceNumber,
+  resolveSourceLabel,
   resolveSyncAction,
 } = require('./backendSyncSupport.service');
 const {
@@ -17,6 +19,10 @@ const {
 
 const MOCK_INVOICE_DATABASE = {};
 const REAL_BACKEND_SYNC_MODES = new Set(['full', 'status_only', 'alerts_only']);
+const RECEIPT_EVIDENCE_MIN_UPLOAD_WIDTH = Math.max(
+  1000,
+  Number(process.env.RECEIPT_EVIDENCE_MIN_UPLOAD_WIDTH || 1400),
+);
 
 let backendContextPromise = null;
 let resolvedCompanyPromise = null;
@@ -78,6 +84,50 @@ const buildBackendApiHeaders = ({
   }
 
   return headers;
+};
+
+const prepareReceiptEvidenceBuffer = async (imagePath) => {
+  const buffer = await fs.promises.readFile(imagePath);
+
+  let metadata = null;
+  try {
+    metadata = await sharp(buffer, { failOn: 'none' }).metadata();
+  } catch {
+    metadata = null;
+  }
+
+  const width = Number(metadata && metadata.width ? metadata.width : 0);
+  if (!width || width >= RECEIPT_EVIDENCE_MIN_UPLOAD_WIDTH) {
+    return {
+      buffer,
+      originalWidth: width || null,
+      preparedWidth: width || null,
+      upscaled: false,
+    };
+  }
+
+  const upscaledBuffer = await sharp(buffer, { failOn: 'none' })
+    .rotate()
+    .resize({
+      width: RECEIPT_EVIDENCE_MIN_UPLOAD_WIDTH,
+      fit: 'inside',
+      withoutEnlargement: false,
+    })
+    .jpeg({
+      quality: 90,
+      mozjpeg: true,
+      chromaSubsampling: '4:4:4',
+    })
+    .toBuffer();
+
+  const upscaledMetadata = await sharp(upscaledBuffer, { failOn: 'none' }).metadata().catch(() => null);
+
+  return {
+    buffer: upscaledBuffer,
+    originalWidth: width || null,
+    preparedWidth: Number(upscaledMetadata && upscaledMetadata.width ? upscaledMetadata.width : 0) || null,
+    upscaled: true,
+  };
 };
 
 const parseJsonSafe = (value) => {
@@ -411,6 +461,43 @@ const resolveDeliveryContext = async (invoiceNumber, companyId) => {
   };
 };
 
+const resolveOperationalAutoApproval = (deliveryContext = {}) => {
+  const tripId = Number(deliveryContext.tripId || 0) || null;
+  const tripNoteId = Number(deliveryContext.tripNoteId || 0) || null;
+  const driverId = Number(deliveryContext.driverId || 0) || null;
+
+  if (!tripNoteId) {
+    return {
+      canAutoApprove: false,
+      status: 'missing_trip_note_assignment',
+      tripId,
+      tripNoteId: null,
+      driverId,
+      reviewReason: 'A NF foi identificada, mas ainda nao esta vinculada a uma entrega/rota para validacao automatica.',
+    };
+  }
+
+  if (!driverId) {
+    return {
+      canAutoApprove: false,
+      status: 'missing_driver_assignment',
+      tripId,
+      tripNoteId,
+      driverId: null,
+      reviewReason: 'A NF foi identificada, mas ainda nao possui motorista atribuido para validacao automatica.',
+    };
+  }
+
+  return {
+    canAutoApprove: true,
+    status: 'matched_driver_assignment',
+    tripId,
+    tripNoteId,
+    driverId,
+    reviewReason: '',
+  };
+};
+
 const buildWhatsappAlertDedupeKey = (code, metadata = {}) => {
   const normalizedCode = normalizeText(code).toUpperCase();
   const messageId = normalizeText(metadata.messageId);
@@ -449,7 +536,7 @@ const uploadReceiptEvidence = async ({ invoiceNumber, imagePath, companyScope, m
   const { ReceiptsService } = await loadBackendContext();
   const actor = buildSystemActor(companyScope);
   const deliveryContext = await resolveDeliveryContext(invoiceNumber, Number(companyScope.id));
-  const buffer = await fs.promises.readFile(imagePath);
+  const preparedEvidence = await prepareReceiptEvidenceBuffer(imagePath);
   const deliveredAt = toDateOnly(
     metadata.deliveredAt
     || metadata.messageTimestamp
@@ -468,7 +555,7 @@ const uploadReceiptEvidence = async ({ invoiceNumber, imagePath, companyScope, m
   try {
     const receipt = await ReceiptsService.uploadReceipt({
       file: {
-        buffer,
+        buffer: preparedEvidence.buffer,
         mimetype: guessMimeTypeFromPath(imagePath),
         originalname: path.basename(imagePath || `${invoiceNumber}.jpg`),
       },
@@ -482,6 +569,11 @@ const uploadReceiptEvidence = async ({ invoiceNumber, imagePath, companyScope, m
       mode: 'backend_service',
       receipt,
       payload,
+      evidence: {
+        upscaled: preparedEvidence.upscaled,
+        originalWidth: preparedEvidence.originalWidth,
+        preparedWidth: preparedEvidence.preparedWidth,
+      },
     };
   } catch (error) {
     if (error && error.code === 'RECEIPT_ALREADY_EXISTS') {
@@ -613,6 +705,146 @@ const createAlertInBackendApi = async (payload = {}) => {
   }, response && typeof response === 'object' ? response : {});
 };
 
+const importRecoveredReceiptInBackendApi = async ({ invoiceNumber, imagePath, metadata = {} }) => {
+  const key = normalizeInvoiceNumber(invoiceNumber);
+  if (!key) {
+    return {
+      uploaded: false,
+      skipped: true,
+      mode: 'backend_api',
+      reason: 'missing_invoice_number',
+    };
+  }
+
+  if (!isRemoteBackendApiEnabled()) {
+    throw new Error('RECEIPT_BACKEND_API_BASE_URL nao configurado.');
+  }
+
+  const preparedEvidence = await prepareReceiptEvidenceBuffer(imagePath);
+  const form = new FormData();
+  form.set('file', new Blob([preparedEvidence.buffer], {
+    type: guessMimeTypeFromPath(imagePath),
+  }), path.basename(imagePath || `${key}.jpg`));
+  form.set('invoiceNumber', key);
+  form.set('nfDetected', key);
+  form.set('forceManualReview', '1');
+  form.set('skipOcr', '1');
+
+  const deliveredAt = toDateOnly(
+    metadata.deliveredAt
+    || metadata.messageTimestamp
+    || metadata.messageDate
+    || new Date(),
+  );
+  if (deliveredAt) form.set('deliveredAt', deliveredAt);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), env.receiptBackendApiTimeoutMs);
+
+  try {
+    const response = await fetch(`${env.receiptBackendApiBaseUrl}/api/receipt-bot/recovered-receipts`, {
+      method: 'POST',
+      headers: buildBackendApiHeaders({
+        includeJsonContentType: false,
+      }),
+      body: form,
+      signal: controller.signal,
+    });
+
+    const rawText = await response.text();
+    const payload = rawText ? parseJsonSafe(rawText) : null;
+
+    if (!response.ok) {
+      const error = new Error(
+        payload && payload.message
+          ? payload.message
+          : `Falha HTTP ${response.status} ao importar canhoto recuperado.`,
+      );
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+
+    return {
+      uploaded: true,
+      skipped: false,
+      mode: 'backend_api',
+      receipt: payload && typeof payload === 'object' ? payload.receipt || payload : payload,
+      evidence: {
+        upscaled: preparedEvidence.upscaled,
+        originalWidth: preparedEvidence.originalWidth,
+        preparedWidth: preparedEvidence.preparedWidth,
+      },
+      recoveryImport: true,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const importRecoveredReceiptInBackend = async ({ invoiceNumber, imagePath, companyScope, metadata = {} }) => {
+  const { ReceiptsService } = await loadBackendContext();
+  const actor = buildSystemActor(companyScope);
+  const deliveryContext = await resolveDeliveryContext(invoiceNumber, Number(companyScope.id));
+  const preparedEvidence = await prepareReceiptEvidenceBuffer(imagePath);
+  const deliveredAt = toDateOnly(
+    metadata.deliveredAt
+    || metadata.messageTimestamp
+    || metadata.messageDate
+    || deliveryContext.tripDate
+    || new Date(),
+  );
+  const payload = {
+    nfNumber: normalizeInvoiceNumber(invoiceNumber),
+    deliveredAt,
+    forceManualReview: true,
+    skipOcr: true,
+    nfDetected: normalizeInvoiceNumber(invoiceNumber),
+  };
+
+  if (deliveryContext.tripId) payload.tripId = deliveryContext.tripId;
+  if (deliveryContext.driverId) payload.motoristaId = deliveryContext.driverId;
+
+  try {
+    const receipt = await ReceiptsService.importRecoveredReceipt({
+      file: {
+        buffer: preparedEvidence.buffer,
+        mimetype: guessMimeTypeFromPath(imagePath),
+        originalname: path.basename(imagePath || `${invoiceNumber}.jpg`),
+      },
+      payload,
+      actor,
+    });
+
+    return {
+      uploaded: true,
+      skipped: false,
+      mode: 'backend_service',
+      receipt,
+      payload,
+      evidence: {
+        upscaled: preparedEvidence.upscaled,
+        originalWidth: preparedEvidence.originalWidth,
+        preparedWidth: preparedEvidence.preparedWidth,
+      },
+      recoveryImport: true,
+    };
+  } catch (error) {
+    if (error && error.code === 'RECEIPT_ALREADY_EXISTS') {
+      return {
+        uploaded: false,
+        skipped: true,
+        mode: 'backend_service',
+        reason: 'receipt_already_exists',
+        error: error.message,
+        payload,
+      };
+    }
+
+    throw error;
+  }
+};
+
 module.exports = {
   async findInvoiceByNumber(invoiceNumber) {
     const lookupMode = env.receiptInvoiceLookupMode;
@@ -681,6 +913,95 @@ module.exports = {
     return Object.assign({}, fallback, {
       mode: lookupMode === 'auto' ? 'auto_mock_fallback' : fallback.mode,
       fallbackFrom: isRemoteBackendApiEnabled() ? 'backend_api' : 'backend_db',
+    });
+  },
+
+  async uploadReceiptEvidence(payload = {}) {
+    const invoiceNumber = normalizeInvoiceNumber(
+      payload.invoiceNumber
+      || payload.nfNumber
+      || payload.nf_number,
+    );
+
+    if (!invoiceNumber) {
+      return {
+        uploaded: false,
+        skipped: true,
+        mode: resolveBackendTransportMode(),
+        reason: 'missing_invoice_number',
+      };
+    }
+
+    if (isRemoteBackendApiEnabled()) {
+      return {
+        uploaded: false,
+        skipped: true,
+        mode: 'backend_api',
+        reason: 'remote_upload_not_supported',
+      };
+    }
+
+    const lookup = payload.lookup || await this.findInvoiceByNumber(invoiceNumber);
+    const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
+
+    if (!companyScope || !Number.isFinite(Number(companyScope.id)) || Number(companyScope.id) <= 0) {
+      return {
+        uploaded: false,
+        skipped: true,
+        mode: 'backend_service',
+        reason: 'company_scope_not_resolved',
+      };
+    }
+
+    return uploadReceiptEvidence({
+      invoiceNumber,
+      imagePath: payload.imagePath,
+      companyScope,
+      metadata: payload.metadata || {},
+    });
+  },
+
+  async importRecoveredReceiptEvidence(payload = {}) {
+    const invoiceNumber = normalizeInvoiceNumber(
+      payload.invoiceNumber
+      || payload.nfNumber
+      || payload.nf_number,
+    );
+
+    if (!invoiceNumber) {
+      return {
+        uploaded: false,
+        skipped: true,
+        mode: resolveBackendTransportMode(),
+        reason: 'missing_invoice_number',
+      };
+    }
+
+    if (isRemoteBackendApiEnabled()) {
+      return importRecoveredReceiptInBackendApi({
+        invoiceNumber,
+        imagePath: payload.imagePath,
+        metadata: payload.metadata || {},
+      });
+    }
+
+    const lookup = payload.lookup || await this.findInvoiceByNumber(invoiceNumber);
+    const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
+
+    if (!companyScope || !Number.isFinite(Number(companyScope.id)) || Number(companyScope.id) <= 0) {
+      return {
+        uploaded: false,
+        skipped: true,
+        mode: 'backend_service',
+        reason: 'company_scope_not_resolved',
+      };
+    }
+
+    return importRecoveredReceiptInBackend({
+      invoiceNumber,
+      imagePath: payload.imagePath,
+      companyScope,
+      metadata: payload.metadata || {},
     });
   },
 
@@ -896,6 +1217,63 @@ module.exports = {
           driverId: null,
           tripDate: null,
         };
+      const operationalValidation = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+        ? resolveOperationalAutoApproval(deliveryContext)
+        : {
+          canAutoApprove: true,
+          status: 'operational_validation_unavailable',
+          tripId: null,
+          tripNoteId: null,
+          driverId: null,
+          reviewReason: '',
+        };
+
+      if (!operationalValidation.canAutoApprove) {
+        const metadata = Object.assign({}, options.metadata || {}, {
+          source: options.metadata && options.metadata.source ? options.metadata.source : 'whatsapp',
+          sourceName: options.metadata && options.metadata.sourceName
+            ? options.metadata.sourceName
+            : (options.metadata && options.metadata.source ? options.metadata.source : 'whatsapp'),
+          backendAction: 'create_receipt_alert',
+          backendMode: syncMode,
+          classification: 'review',
+          tripId: deliveryContext.tripId || null,
+          tripNoteId: deliveryContext.tripNoteId || null,
+          driverId: deliveryContext.driverId || null,
+          reviewReason: operationalValidation.reviewReason,
+          operationalValidationStatus: operationalValidation.status,
+          reasons: Array.from(new Set([
+            ...(Array.isArray(analysis.classification && analysis.classification.reasons)
+              ? analysis.classification.reasons
+              : []),
+            operationalValidation.reviewReason,
+          ].filter(Boolean))),
+        });
+
+        const alert = await this.createReceiptAlert({
+          invoiceNumber: syncAction.invoiceNumber,
+          lookup,
+          driverId: deliveryContext.driverId || null,
+          tripId: deliveryContext.tripId || null,
+          tripNoteId: deliveryContext.tripNoteId || null,
+          code: 'RECEIPT_MANUAL_REVIEW_REQUIRED',
+          title: `Canhoto da NF ${syncAction.invoiceNumber} exige revisao operacional`,
+          message: `${operationalValidation.reviewReason} Grupo: ${resolveSourceLabel(metadata)}.`,
+          severity: 'WARNING',
+          metadata,
+        });
+
+        return {
+          mode: syncMode,
+          action: 'create_receipt_alert',
+          reason: operationalValidation.status,
+          lookup,
+          alert,
+          deliveryContext,
+          operationalValidation,
+        };
+      }
+
       const upload = syncAction.uploadReceipt
         ? (
           isRemoteBackendApiEnabled()
@@ -943,6 +1321,10 @@ module.exports = {
         metadata: Object.assign({}, options.metadata || {}, {
           backendAction: 'mark_invoice_delivered',
           backendMode: syncMode,
+          tripId: deliveryContext.tripId || null,
+          tripNoteId: deliveryContext.tripNoteId || null,
+          driverId: deliveryContext.driverId || null,
+          operationalValidationStatus: operationalValidation.status,
         }),
       });
 

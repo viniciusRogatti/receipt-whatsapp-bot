@@ -54,6 +54,7 @@ const buildOcrDocument = (responsePayload = {}) => {
   }
 
   const pages = Array.isArray(annotation.pages) ? annotation.pages : [];
+  const firstPage = pages[0] || null;
   const lines = [];
 
   pages.forEach((page) => {
@@ -75,6 +76,8 @@ const buildOcrDocument = (responsePayload = {}) => {
   return {
     fullText: String(annotation.text || '').trim(),
     lines,
+    pageWidth: Number(firstPage && firstPage.width ? firstPage.width : 0),
+    pageHeight: Number(firstPage && firstPage.height ? firstPage.height : 0),
     baseConfidence: providerConfidence,
     providerConfidence,
     raw: responsePayload,

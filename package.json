@@ -14,6 +14,10 @@
     "worker:once": "node src/worker.js --once",
     "maintenance:once": "node src/maintenance.js",
     "debug:ui": "node src/debug-server/server.js",
+    "recover:today": "node scripts/recoverTodayWhatsappReceipts.js",
+    "analyze:recovery": "node scripts/analyzeRecoveredWhatsappReceipts.js",
+    "extract:nf:recovery": "node scripts/extractRecoveredNfRoi.js",
+    "import:recovery:receipts": "node scripts/importRecoveredReceiptsToPage.js",
     "test": "node src/tests/runUnitTests.js",
     "test:local": "node src/tests/localImageRunner.js",
     "test:unit": "node src/tests/runUnitTests.js"
