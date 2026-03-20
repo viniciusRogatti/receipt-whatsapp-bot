@@ -398,6 +398,7 @@ const findInvoiceInBackendApi = async (invoiceNumber) => {
   return {
     found: !!payload.found,
     invoice: payload.invoice || null,
+    deliveryContext: normalizeDeliveryContext(payload.deliveryContext || {}),
     mode: 'backend_api',
     reason: payload.reason || (payload.found ? 'invoice_found' : 'invoice_not_found'),
     company: payload.company || null,
@@ -460,6 +461,13 @@ const resolveDeliveryContext = async (invoiceNumber, companyId) => {
     tripDate: tripNote && tripNote.Trip ? tripNote.Trip.date : null,
   };
 };
+
+const normalizeDeliveryContext = (deliveryContext = {}) => ({
+  tripId: Number(deliveryContext.tripId || deliveryContext.trip_id || 0) || null,
+  tripNoteId: Number(deliveryContext.tripNoteId || deliveryContext.trip_note_id || 0) || null,
+  driverId: Number(deliveryContext.driverId || deliveryContext.driver_id || 0) || null,
+  tripDate: deliveryContext.tripDate || deliveryContext.trip_date || null,
+});
 
 const resolveOperationalAutoApproval = (deliveryContext = {}) => {
   const tripId = Number(deliveryContext.tripId || 0) || null;
@@ -1125,34 +1133,61 @@ module.exports = {
       };
     }
 
-    if (isRemoteBackendApiEnabled()) {
-      return {
-        created: false,
-        skipped: true,
-        mode: 'backend_api',
-        reason: 'activity_endpoint_not_configured',
-      };
-    }
-
     const invoiceNumber = normalizeInvoiceNumber(payload.invoiceNumber || payload.nfNumber);
-    if (!invoiceNumber) {
-      return {
-        created: false,
-        skipped: true,
-        mode: 'backend_service',
-        reason: 'missing_invoice_number',
-      };
-    }
-
-    const lookup = payload.lookup || await findInvoiceInBackendDb(invoiceNumber);
-    const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
-    const deliveryContext = payload.deliveryContext || await resolveDeliveryContext(invoiceNumber, Number(companyScope.id));
-    const { ReceiptWhatsappActivityService } = await loadBackendContext();
     const metadata = Object.assign({}, payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}, {
       source: 'whatsapp',
       sourceName: payload.metadata && payload.metadata.sourceName ? payload.metadata.sourceName : 'whatsapp',
       summaryMessage: payload.summaryMessage || buildWhatsappSuccessSummary(invoiceNumber, payload.metadata),
     });
+
+    if (!invoiceNumber) {
+      return {
+        created: false,
+        skipped: true,
+        mode: isRemoteBackendApiEnabled() ? 'backend_api' : 'backend_service',
+        reason: 'missing_invoice_number',
+      };
+    }
+
+    const lookup = payload.lookup || await findInvoiceInConfiguredBackend(invoiceNumber, { throwOnError: true });
+    const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
+    const deliveryContext = payload.deliveryContext
+      ? normalizeDeliveryContext(payload.deliveryContext)
+      : (
+        isRemoteBackendApiEnabled()
+          ? normalizeDeliveryContext(lookup && lookup.deliveryContext ? lookup.deliveryContext : {})
+          : await resolveDeliveryContext(invoiceNumber, Number(companyScope.id))
+      );
+
+    if (isRemoteBackendApiEnabled()) {
+      const remotePayload = await requestBackendApi('/api/receipt-bot/whatsapp-success-activity', {
+        method: 'POST',
+        body: {
+          invoiceNumber,
+          tripId: deliveryContext.tripId,
+          tripNoteId: deliveryContext.tripNoteId,
+          driverId: deliveryContext.driverId,
+          sourceMessageId: payload.sourceMessageId || metadata.messageId || null,
+          occurredAt: payload.occurredAt || metadata.messageTimestamp || metadata.messageDate || new Date().toISOString(),
+          groupId: payload.groupId || metadata.groupId || null,
+          groupName: payload.groupName || metadata.groupName || null,
+          senderPhone: payload.senderPhone || metadata.senderPhone || null,
+          senderName: payload.senderName || metadata.senderName || metadata.sender || null,
+          senderContactName: payload.senderContactName || metadata.senderContactName || null,
+          backendAction: payload.backendAction || 'mark_invoice_delivered',
+          backendMode: payload.backendMode || env.receiptBackendSyncMode,
+          classification: payload.classification || 'valid',
+          metadata,
+        },
+      });
+
+      return Object.assign({
+        mode: 'backend_api',
+        deliveryContext,
+      }, remotePayload || {});
+    }
+
+    const { ReceiptWhatsappActivityService } = await loadBackendContext();
 
     const result = await ReceiptWhatsappActivityService.recordSuccessActivity({
       companyId: Number(companyScope.id),
@@ -1206,11 +1241,13 @@ module.exports = {
     }
 
     if (syncAction.type === 'mark_delivered') {
-      const companyScope = isRemoteBackendApiEnabled()
-        ? null
-        : await resolveCompanyScopeFromLookup(lookup);
+      const companyScope = await resolveCompanyScopeFromLookup(lookup);
       const deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
-        ? await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id))
+        ? (
+          isRemoteBackendApiEnabled()
+            ? normalizeDeliveryContext(lookup && lookup.deliveryContext ? lookup.deliveryContext : {})
+            : await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id))
+        )
         : {
           tripId: null,
           tripNoteId: null,
