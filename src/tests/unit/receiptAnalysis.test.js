@@ -100,6 +100,55 @@ module.exports = () => ([
     },
   },
   {
+    name: 'receiptAnalysis nao troca NF forte por candidato fraco so porque existe no banco',
+    run: async () => {
+      const originalFindInvoiceByNumber = apiService.findInvoiceByNumber;
+      apiService.findInvoiceByNumber = async (invoiceNumber) => ({
+        found: invoiceNumber === '1719042',
+        invoice: invoiceNumber === '1719042'
+          ? { invoiceNumber }
+          : null,
+        mode: 'mock',
+        reason: invoiceNumber === '1719042' ? 'invoice_found' : 'invoice_not_found',
+      });
+
+      try {
+        const result = await resolveCandidateByInvoiceLookup({
+          nfExtraction: {
+            nf: '1719642',
+            confidence: 0.64,
+            candidates: [
+              buildCandidate({
+                nf: '1719642',
+                confidence: 0.64,
+                supportingVariants: ['rotate_right__document_gray'],
+                supportCount: 6,
+                roiSupportCount: 2,
+              }),
+              buildCandidate({
+                nf: '1719042',
+                confidence: 0.24,
+                supportingVariants: ['rotate_right__document_gray'],
+              }),
+            ],
+          },
+          currentLookup: {
+            found: false,
+            invoice: null,
+            mode: 'mock',
+            reason: 'invoice_not_found',
+          },
+        });
+
+        assert.strictEqual(result.reranked, false);
+        assert.strictEqual(result.nfExtraction.nf, '1719642');
+        assert.strictEqual(result.invoiceLookup.found, false);
+      } finally {
+        apiService.findInvoiceByNumber = originalFindInvoiceByNumber;
+      }
+    },
+  },
+  {
     name: 'receiptAnalysis aproveita campo do orientation probe quando a estrutura final falha',
     run: async () => {
       const merged = mergeOrientationProbeFallbackFields({

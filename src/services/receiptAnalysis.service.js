@@ -283,6 +283,47 @@ const hasCompetingStrongCandidate = (nfExtraction = {}) => {
   ));
 };
 
+const hasStrongConfirmedCandidateEvidence = (candidate = null) => {
+  if (!candidate) return false;
+
+  const confidence = Number(candidate.confidence || 0);
+  const supportCount = Number(candidate.supportCount || 0);
+  const roiSupportCount = Number(candidate.roiSupportCount || 0);
+  const precisionScore = Number(candidate.precisionScore || 0);
+  const hasContext = !!(
+    candidate.context
+    && (candidate.context.foundNfe || candidate.context.foundNumeroMarker)
+  );
+
+  return (
+    confidence >= 0.55
+    || supportCount >= 2
+    || roiSupportCount >= 2
+    || precisionScore > 0
+    || hasContext
+  );
+};
+
+const canPromoteConfirmedCandidate = ({
+  currentExtraction = {},
+  confirmedCandidate = null,
+}) => {
+  if (!confirmedCandidate) return false;
+
+  const currentNf = String(currentExtraction && currentExtraction.nf || '').trim();
+  const currentConfidence = Number(currentExtraction && currentExtraction.confidence || 0);
+  const confirmedConfidence = Number(confirmedCandidate.confidence || 0);
+
+  if (!currentNf) return true;
+  if (confirmedCandidate.nf === currentNf) return true;
+  if (confirmedConfidence >= currentConfidence - 0.08) return true;
+
+  return (
+    confirmedConfidence >= currentConfidence - 0.16
+    && hasStrongConfirmedCandidateEvidence(confirmedCandidate)
+  );
+};
+
 const resolveFuzzyDbRescue = async (candidates = []) => {
   const bestConfidence = candidates.reduce((maxValue, candidate) => (
     Math.max(maxValue, Number(candidate && candidate.confidence || 0))
@@ -411,8 +452,12 @@ const resolveCandidateByInvoiceLookup = async ({
   }
   const sameCandidate = chosen.candidate.nf === nfExtraction.nf;
   const shouldReplace = !sameCandidate && (
-    !currentLookup.found
-    || Number(chosen.candidate.confidence || 0) >= Number(nfExtraction.confidence || 0) - 0.04
+    currentLookup.found
+      ? Number(chosen.candidate.confidence || 0) >= Number(nfExtraction.confidence || 0) - 0.04
+      : canPromoteConfirmedCandidate({
+        currentExtraction: nfExtraction,
+        confirmedCandidate: chosen.candidate,
+      })
   );
 
   if (!shouldReplace) {
@@ -632,6 +677,8 @@ const buildFailureDiagnostics = ({
 module.exports = {
   __testables: {
     buildTightFuzzyDbNeighbors,
+    canPromoteConfirmedCandidate,
+    hasStrongConfirmedCandidateEvidence,
     isEligibleForFuzzyDbRescue,
     resolveCandidateByInvoiceLookup,
     resolveFuzzyDbRescue,
@@ -658,9 +705,12 @@ module.exports = {
       outputDir,
       profile,
     });
-    const effectiveFastMode = fastMode || (
+    const shouldForceFastMode = !!(
       preprocess.captureProfile
       && preprocess.captureProfile.id === 'receipt_strip'
+    );
+    const effectiveFastMode = fastMode || (
+      shouldForceFastMode
     );
     const afterPreprocess = Date.now();
     emitProgress({
@@ -703,10 +753,11 @@ module.exports = {
       status: 'running',
       message: 'Executando OCR global apenas como apoio contextual.',
     });
+    const shouldRunGlobalSupportOcr = !effectiveFastMode || shouldForceFastMode;
     const globalOcrResult = await receiptStructuredOcrService.runGlobalSupportOcr({
       preprocess,
       orientationProbe: ocrProbe,
-      fastMode: effectiveFastMode,
+      fastMode: !shouldRunGlobalSupportOcr,
     });
     emitProgress({
       step: 'global_ocr',
