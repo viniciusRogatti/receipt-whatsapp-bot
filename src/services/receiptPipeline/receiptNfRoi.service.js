@@ -40,6 +40,7 @@ const buildTemplateFixedPixelBox = ({ sourceImage, requestedDefinition }) => {
     nf_number_line: { paddingXRatio: 0.4, paddingYRatio: 0.28 },
     nf_number_tight: { paddingXRatio: 0.48, paddingYRatio: 0.24 },
     nf_header: { paddingXRatio: 0.3, paddingYRatio: 0.24 },
+    nf_series_line: { paddingXRatio: 0.26, paddingYRatio: 0.22 },
     nf_block_wide: { paddingXRatio: 0.1, paddingYRatio: 0.08 },
   };
   const expansion = expansionByRoi[requestedDefinition.id] || { paddingXRatio: 0.1, paddingYRatio: 0.08 };

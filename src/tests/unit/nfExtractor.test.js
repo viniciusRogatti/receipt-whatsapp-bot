@@ -1,6 +1,33 @@
 const assert = require('assert');
 const nfExtractorService = require('../../services/nfExtractor.service');
 
+const buildFieldAnchorDocs = ({ sourceVariantId, prefix, confidence = 76 }) => ([
+  {
+    id: `${prefix}-header`,
+    sourceType: 'nf_roi',
+    confidence,
+    targetRole: 'nf_header_anchor',
+    meta: {
+      requestedRoiId: 'nf_header',
+      roiId: 'nf_header',
+      sourceVariantId,
+    },
+    textRaw: 'NF-e',
+  },
+  {
+    id: `${prefix}-series`,
+    sourceType: 'nf_roi',
+    confidence,
+    targetRole: 'nf_series_anchor',
+    meta: {
+      requestedRoiId: 'nf_series_line',
+      roiId: 'nf_series_line',
+      sourceVariantId,
+    },
+    textRaw: 'SÉRIE 1',
+  },
+]);
+
 module.exports = () => ([
   {
     name: 'nfExtractor extrai NF por contexto direto',
@@ -32,26 +59,30 @@ module.exports = () => ([
     run: async () => {
       const result = await nfExtractorService.extractInvoiceNumber({
         documents: [
+          ...buildFieldAnchorDocs({
+            sourceVariantId: 'upright__document_gray',
+            prefix: 'roi1',
+          }),
           {
-            id: 'roi1',
+            id: 'roi1-line',
             sourceType: 'nf_roi',
             confidence: 75,
-            targetRole: 'nf_block_context',
+            targetRole: 'nf_digits_line',
             meta: {
-              requestedRoiId: 'nf_block',
-              roiId: 'nf_block',
+              requestedRoiId: 'nf_number_line',
+              roiId: 'nf_number_line',
               sourceVariantId: 'upright__document_gray',
             },
-            textRaw: 'NF-e N° 1711762',
+            textRaw: '1711762',
           },
           {
             id: 'roi2',
             sourceType: 'nf_roi',
             confidence: 81,
-            targetRole: 'nf_digits_line',
+            targetRole: 'nf_digits_isolated_confirm',
             meta: {
-              requestedRoiId: 'nf_number_line',
-              roiId: 'nf_number_line',
+              requestedRoiId: 'nf_number_tight',
+              roiId: 'nf_number_tight',
               sourceVariantId: 'upright__document_gray',
             },
             textRaw: '1711762',
@@ -210,10 +241,14 @@ module.exports = () => ([
     },
   },
   {
-    name: 'nfExtractor sobe confianca para consenso forte em ROIs precisas mesmo sem cabecalho',
+    name: 'nfExtractor sobe confianca para consenso forte em ROIs precisas com ancoras do campo',
     run: async () => {
       const result = await nfExtractorService.extractInvoiceNumber({
         documents: [
+          ...buildFieldAnchorDocs({
+            sourceVariantId: 'upright__document_gray',
+            prefix: 'tight',
+          }),
           {
             id: 'tight-1',
             sourceType: 'nf_roi',
@@ -282,7 +317,7 @@ module.exports = () => ([
     },
   },
   {
-    name: 'nfExtractor sustenta NF exata lida sozinha no bloco quando a ROI esta alinhada',
+    name: 'nfExtractor rejeita NF isolada sem ancoras do campo',
     run: async () => {
       const result = await nfExtractorService.extractInvoiceNumber({
         documents: [
@@ -301,8 +336,95 @@ module.exports = () => ([
         ],
       });
 
-      assert.strictEqual(result.nf, '1714164');
-      assert.ok(result.confidence >= 0.6);
+      assert.strictEqual(result.nf, null);
+    },
+  },
+  {
+    name: 'nfExtractor ignora data com barras quando a barra vira digito no bloco da NF',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'date-artifact',
+            sourceType: 'nf_roi',
+            confidence: 70,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: '20/03/26 1',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, null);
+    },
+  },
+  {
+    name: 'nfExtractor prioriza NF real quando ha candidato compacto com cara de data',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'compact-date',
+            sourceType: 'nf_roi',
+            confidence: 72,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: '2010326',
+          },
+          ...buildFieldAnchorDocs({
+            sourceVariantId: 'upright__document_binary',
+            prefix: 'real-nf',
+          }),
+          {
+            id: 'real-nf',
+            sourceType: 'nf_roi',
+            confidence: 72,
+            targetRole: 'nf_digits_line',
+            meta: {
+              requestedRoiId: 'nf_number_line',
+              roiId: 'nf_number_line',
+              sourceVariantId: 'upright__document_binary',
+            },
+            textRaw: '1721772',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, '1721772');
+      const compactDateCandidate = (result.candidates || []).find((candidate) => candidate.nf === '2010326');
+      assert.ok(compactDateCandidate);
+      assert.ok(compactDateCandidate.confidence <= 0.35);
+    },
+  },
+  {
+    name: 'nfExtractor rejeita numero escrito pelo cliente sem ancoras NF-e e serie 1',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'cliente-numero-solto',
+            sourceType: 'nf_roi',
+            confidence: 84,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: '261672',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, null);
     },
   },
 ]);
