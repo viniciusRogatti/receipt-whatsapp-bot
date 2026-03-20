@@ -34,6 +34,14 @@ const resolveBackendTransportMode = () => (
     ? 'backend_api'
     : 'backend_service'
 );
+const PROMOTABLE_MISSING_RECEIPT_DATE_REASONS = new Set([
+  'campo obrigatorio ausente: data de recebimento.',
+  'data de recebimento nao foi localizada com seguranca.',
+]);
+const IGNORABLE_REVIEW_REASONS_FOR_AUTO_PROMOTION = new Set([
+  'ha indicios estruturais bons, mas falta confianca para aprovar automaticamente o canhoto.',
+  'a nf foi localizada, mas ainda ha ambiguidade residual na leitura estrutural da imagem.',
+]);
 
 const toDateOnly = (value) => {
   if (!value && value !== 0) return null;
@@ -468,6 +476,65 @@ const normalizeDeliveryContext = (deliveryContext = {}) => ({
   driverId: Number(deliveryContext.driverId || deliveryContext.driver_id || 0) || null,
   tripDate: deliveryContext.tripDate || deliveryContext.trip_date || null,
 });
+
+const buildEmptyDeliveryContext = () => ({
+  tripId: null,
+  tripNoteId: null,
+  driverId: null,
+  tripDate: null,
+});
+
+const normalizeReasonList = (analysis = {}) => (
+  Array.isArray(analysis.classification && analysis.classification.reasons)
+    ? analysis.classification.reasons
+      .map((reason) => normalizeText(reason).toLowerCase())
+      .filter(Boolean)
+    : []
+);
+
+const isMissingReceiptDateOnlyReview = (analysis = {}) => {
+  if (normalizeClassification(analysis) !== 'review') return false;
+
+  const reasons = normalizeReasonList(analysis);
+  if (!reasons.length) return false;
+
+  let foundMissingReceiptDateReason = false;
+
+  for (const reason of reasons) {
+    if (PROMOTABLE_MISSING_RECEIPT_DATE_REASONS.has(reason)) {
+      foundMissingReceiptDateReason = true;
+      continue;
+    }
+
+    if (IGNORABLE_REVIEW_REASONS_FOR_AUTO_PROMOTION.has(reason)) {
+      continue;
+    }
+
+    return false;
+  }
+
+  return foundMissingReceiptDateReason;
+};
+
+const promoteMissingReceiptDateReview = (analysis = {}) => {
+  const currentClassification = analysis.classification && typeof analysis.classification === 'object'
+    ? analysis.classification
+    : {};
+  const currentMetrics = currentClassification.metrics && typeof currentClassification.metrics === 'object'
+    ? currentClassification.metrics
+    : {};
+
+  return Object.assign({}, analysis, {
+    classification: Object.assign({}, currentClassification, {
+      classification: 'valid',
+      metrics: Object.assign({}, currentMetrics, {
+        promotedByOperationalContext: true,
+        promotionReason: 'missing_receipt_date_only',
+        originalClassification: normalizeClassification(analysis),
+      }),
+    }),
+  });
+};
 
 const resolveOperationalAutoApproval = (deliveryContext = {}) => {
   const tripId = Number(deliveryContext.tripId || 0) || null;
@@ -1218,6 +1285,11 @@ module.exports = {
     const syncMode = env.receiptBackendSyncMode;
     const invoiceNumber = normalizeInvoiceNumber(analysis.nfExtraction && analysis.nfExtraction.nf);
     let lookup = null;
+    let companyScope = null;
+    let deliveryContext = null;
+    let operationalValidation = null;
+    let effectiveAnalysis = analysis;
+    let promotedFromReview = false;
 
     if (invoiceNumber) {
       lookup = isRealBackendSyncEnabled()
@@ -1225,8 +1297,37 @@ module.exports = {
         : (analysis.invoiceLookup || await this.findInvoiceByNumber(invoiceNumber));
     }
 
+    if (lookup && lookup.found && normalizeClassification(analysis) === 'review') {
+      companyScope = await resolveCompanyScopeFromLookup(lookup);
+      deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+        ? (
+          isRemoteBackendApiEnabled()
+            ? normalizeDeliveryContext(lookup && lookup.deliveryContext ? lookup.deliveryContext : {})
+            : await resolveDeliveryContext(invoiceNumber, Number(companyScope.id))
+        )
+        : buildEmptyDeliveryContext();
+      operationalValidation = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+        ? resolveOperationalAutoApproval(deliveryContext)
+        : {
+          canAutoApprove: true,
+          status: 'operational_validation_unavailable',
+          tripId: null,
+          tripNoteId: null,
+          driverId: null,
+          reviewReason: '',
+        };
+
+      if (
+        operationalValidation.canAutoApprove
+        && isMissingReceiptDateOnlyReview(analysis)
+      ) {
+        effectiveAnalysis = promoteMissingReceiptDateReview(analysis);
+        promotedFromReview = true;
+      }
+    }
+
     const syncAction = resolveSyncAction({
-      analysis,
+      analysis: effectiveAnalysis,
       lookup,
       syncMode,
     });
@@ -1241,29 +1342,30 @@ module.exports = {
     }
 
     if (syncAction.type === 'mark_delivered') {
-      const companyScope = await resolveCompanyScopeFromLookup(lookup);
-      const deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
-        ? (
-          isRemoteBackendApiEnabled()
-            ? normalizeDeliveryContext(lookup && lookup.deliveryContext ? lookup.deliveryContext : {})
-            : await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id))
-        )
-        : {
-          tripId: null,
-          tripNoteId: null,
-          driverId: null,
-          tripDate: null,
-        };
-      const operationalValidation = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
-        ? resolveOperationalAutoApproval(deliveryContext)
-        : {
-          canAutoApprove: true,
-          status: 'operational_validation_unavailable',
-          tripId: null,
-          tripNoteId: null,
-          driverId: null,
-          reviewReason: '',
-        };
+      if (!companyScope) {
+        companyScope = await resolveCompanyScopeFromLookup(lookup);
+      }
+      if (!deliveryContext) {
+        deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+          ? (
+            isRemoteBackendApiEnabled()
+              ? normalizeDeliveryContext(lookup && lookup.deliveryContext ? lookup.deliveryContext : {})
+              : await resolveDeliveryContext(syncAction.invoiceNumber, Number(companyScope.id))
+          )
+          : buildEmptyDeliveryContext();
+      }
+      if (!operationalValidation) {
+        operationalValidation = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
+          ? resolveOperationalAutoApproval(deliveryContext)
+          : {
+            canAutoApprove: true,
+            status: 'operational_validation_unavailable',
+            tripId: null,
+            tripNoteId: null,
+            driverId: null,
+            reviewReason: '',
+          };
+      }
 
       if (!operationalValidation.canAutoApprove) {
         const metadata = Object.assign({}, options.metadata || {}, {
@@ -1354,7 +1456,7 @@ module.exports = {
         senderContactName: options.metadata && options.metadata.senderContactName,
         backendAction: 'mark_invoice_delivered',
         backendMode: syncMode,
-        classification: normalizeClassification(analysis),
+        classification: normalizeClassification(effectiveAnalysis),
         metadata: Object.assign({}, options.metadata || {}, {
           backendAction: 'mark_invoice_delivered',
           backendMode: syncMode,
@@ -1362,6 +1464,9 @@ module.exports = {
           tripNoteId: deliveryContext.tripNoteId || null,
           driverId: deliveryContext.driverId || null,
           operationalValidationStatus: operationalValidation.status,
+          promotedFromReview,
+          promotionReason: promotedFromReview ? 'missing_receipt_date_only' : null,
+          originalClassification: promotedFromReview ? normalizeClassification(analysis) : null,
         }),
       });
 
@@ -1372,6 +1477,7 @@ module.exports = {
         upload,
         update,
         activity,
+        promotedFromReview,
       };
     }
 
