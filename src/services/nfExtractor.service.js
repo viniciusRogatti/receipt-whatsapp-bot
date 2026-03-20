@@ -29,6 +29,7 @@ const EXPECTED_NF_LENGTHS = Array.isArray(env.ocrExpectedNfLengths) && env.ocrEx
   : [7];
 const MAX_EXPECTED_NF_LENGTH = EXPECTED_NF_LENGTHS[EXPECTED_NF_LENGTHS.length - 1];
 const OVERFLOW_DIGIT_SEQUENCE_REGEX = new RegExp(`\\d{${MAX_EXPECTED_NF_LENGTH + 1},${MAX_EXPECTED_NF_LENGTH + 4}}`, 'g');
+const DATE_SEPARATOR_REGEX = /\b\d{1,2}[\/.-]\d{1,2}[\/.-]\d{2,4}\b/;
 const OCR_FUZZY_DIGIT_MAP = {
   B: '8',
   D: '0',
@@ -148,6 +149,105 @@ const isExpectedNfLength = (nf) => {
   return Array.isArray(env.ocrExpectedNfLengths) && env.ocrExpectedNfLengths.length
     ? env.ocrExpectedNfLengths.includes(size)
     : size === 7;
+};
+
+const isValidCalendarDate = ({ day, month, year }) => {
+  const dayNumber = Number(day);
+  const monthNumber = Number(month);
+  const yearNumber = year.length === 2
+    ? Number(`20${year}`)
+    : Number(year);
+
+  if (!Number.isInteger(dayNumber) || !Number.isInteger(monthNumber) || !Number.isInteger(yearNumber)) {
+    return false;
+  }
+  if (monthNumber < 1 || monthNumber > 12 || dayNumber < 1 || dayNumber > 31) {
+    return false;
+  }
+
+  const candidate = new Date(Date.UTC(yearNumber, monthNumber - 1, dayNumber));
+  return (
+    !Number.isNaN(candidate.getTime())
+    && candidate.getUTCFullYear() === yearNumber
+    && candidate.getUTCMonth() === monthNumber - 1
+    && candidate.getUTCDate() === dayNumber
+  );
+};
+
+const isCompactDateDigits = (value) => {
+  const digits = digitsOnly(value);
+  if (digits.length === 6) {
+    return (
+      isValidCalendarDate({
+        day: digits.slice(0, 2),
+        month: digits.slice(2, 4),
+        year: digits.slice(4, 6),
+      })
+      || isValidCalendarDate({
+        day: digits.slice(4, 6),
+        month: digits.slice(2, 4),
+        year: digits.slice(0, 2),
+      })
+    );
+  }
+
+  if (digits.length === 8) {
+    return (
+      isValidCalendarDate({
+        day: digits.slice(0, 2),
+        month: digits.slice(2, 4),
+        year: digits.slice(4, 8),
+      })
+      || isValidCalendarDate({
+        day: digits.slice(6, 8),
+        month: digits.slice(4, 6),
+        year: digits.slice(0, 4),
+      })
+    );
+  }
+
+  return false;
+};
+
+const buildSeparatorArtifactVariants = (digits, maxRemovals = 2) => {
+  const normalized = digitsOnly(digits);
+  const values = new Set([normalized]);
+
+  const visit = (currentDigits, removalCount) => {
+    if (removalCount >= maxRemovals) return;
+
+    for (let index = 0; index < currentDigits.length; index += 1) {
+      if (currentDigits[index] !== '1') continue;
+      const variant = currentDigits.slice(0, index) + currentDigits.slice(index + 1);
+      if (!variant || values.has(variant)) continue;
+      values.add(variant);
+      visit(variant, removalCount + 1);
+    }
+  };
+
+  visit(normalized, 0);
+  return Array.from(values);
+};
+
+const looksLikeDateLikeEvidence = ({
+  digits,
+  rawWindowText = '',
+  searchableWindowText = '',
+}) => {
+  const normalizedDigits = digitsOnly(digits);
+  if (!normalizedDigits) return false;
+
+  const normalizedRaw = normalizeOcrNoise(rawWindowText);
+  const searchable = buildSearchableText(searchableWindowText || rawWindowText);
+  const hasDateLabel = /\bdata\b/.test(searchable) || /\brecebimento\b/.test(searchable);
+
+  if (DATE_SEPARATOR_REGEX.test(normalizedRaw)) return true;
+  if (hasDateLabel && buildSeparatorArtifactVariants(normalizedDigits).some((variant) => isCompactDateDigits(variant))) {
+    return true;
+  }
+
+  return buildSeparatorArtifactVariants(normalizedDigits)
+    .some((variant) => isCompactDateDigits(variant));
 };
 
 const normalizeFuzzyDigitSequence = (value) => {
@@ -359,6 +459,12 @@ const buildCandidate = ({
   const digitMatches = collectRegexMatches(searchableWindow, DIGIT_GROUP_REGEX);
   const digitMatch = digitMatches.find((item) => digitsOnly(item.match) === digits) || digitMatches[0] || { index: 0 };
   const context = inferContext(searchableWindow);
+  const hasContextualNfMarker = context.foundNfe || context.foundNumeroMarker;
+  const dateLikeEvidence = !hasContextualNfMarker && looksLikeDateLikeEvidence({
+    digits,
+    rawWindowText: windowText || evidence || '',
+    searchableWindowText: searchableWindow,
+  });
   const lineShort = searchableWindow.length <= 44;
   let confidence = (Number(source.confidence || 0) / 100) * 0.22;
   const reasons = [];
@@ -420,6 +526,11 @@ const buildCandidate = ({
     reasons.push('digitos_improvaveis');
   }
 
+  if (dateLikeEvidence) {
+    confidence -= 0.24;
+    reasons.push('sequencia_semelhante_a_data');
+  }
+
   confidence = Number(Math.max(0, Math.min(0.99, confidence)).toFixed(2));
 
   return {
@@ -433,6 +544,7 @@ const buildCandidate = ({
     targetRole: source.targetRole,
     confidence,
     context,
+    dateLikeEvidence,
     evidence: truncateText(evidence || windowText || searchableWindow, 180),
     reasons,
     requestedRoiId: source.meta && source.meta.requestedRoiId ? source.meta.requestedRoiId : null,
@@ -615,6 +727,7 @@ const aggregateCandidates = (candidates = []) => Object.keys(
   const contextBonus = contexts.foundNfe && contexts.foundNumeroMarker ? 0.06 : contexts.foundNfe ? 0.03 : 0;
   const digitDominantShortEvidence = hasDigitDominantShortEvidence(nf, evidence);
   const digitDominantRoiBonus = digitDominantShortEvidence ? 0.12 : 0;
+  const hasDateLikeEvidence = evidence.some((item) => item.dateLikeEvidence);
   const contextlessPenalty = contexts.foundNfe || contexts.foundNumeroMarker
     ? 0
     : strongTightConsensus || strongLineConsensus
@@ -624,6 +737,16 @@ const aggregateCandidates = (candidates = []) => Object.keys(
       : supportsPreciseTemplate
         ? 0.05
         : 0.28;
+  const blockOnlyPenalty = (
+    !contexts.foundNfe
+    && !contexts.foundNumeroMarker
+    && !supportsPreciseTemplate
+    && uniqueRois.length === 1
+    && uniqueRois[0] === 'nf_block'
+  ) ? 0.06 : 0;
+  const dateLikePenalty = hasDateLikeEvidence && !contexts.foundNfe && !contexts.foundNumeroMarker
+    ? (supportsPreciseTemplate ? 0.08 : 0.18)
+    : 0;
   const lengthPenalty = nf.length <= 6 && !contexts.foundNfe && !contexts.foundNumeroMarker ? 0.06 : 0;
   const preciseTemplateBonus = supportsPreciseTemplate ? 0.08 : 0;
   let confidence = Number(Math.max(0, Math.min(
@@ -636,6 +759,8 @@ const aggregateCandidates = (candidates = []) => Object.keys(
       + digitDominantRoiBonus
       + preciseTemplateBonus
       - contextlessPenalty
+      - blockOnlyPenalty
+      - dateLikePenalty
       - lengthPenalty,
   )).toFixed(2));
   if (strongTightConsensus) {

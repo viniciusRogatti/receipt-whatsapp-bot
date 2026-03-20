@@ -305,4 +305,65 @@ module.exports = () => ([
       assert.ok(result.confidence >= 0.6);
     },
   },
+  {
+    name: 'nfExtractor ignora data com barras quando a barra vira digito no bloco da NF',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'date-artifact',
+            sourceType: 'nf_roi',
+            confidence: 70,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: '20/03/26 1',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, null);
+    },
+  },
+  {
+    name: 'nfExtractor prioriza NF real quando ha candidato compacto com cara de data',
+    run: async () => {
+      const result = await nfExtractorService.extractInvoiceNumber({
+        documents: [
+          {
+            id: 'compact-date',
+            sourceType: 'nf_roi',
+            confidence: 72,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: '2010326',
+          },
+          {
+            id: 'real-nf',
+            sourceType: 'nf_roi',
+            confidence: 72,
+            targetRole: 'nf_block_context',
+            meta: {
+              requestedRoiId: 'nf_block',
+              roiId: 'nf_block',
+              sourceVariantId: 'upright__document_gray',
+            },
+            textRaw: '1721772',
+          },
+        ],
+      });
+
+      assert.strictEqual(result.nf, '1721772');
+      const compactDateCandidate = (result.candidates || []).find((candidate) => candidate.nf === '2010326');
+      assert.ok(compactDateCandidate);
+      assert.ok(compactDateCandidate.confidence <= 0.35);
+    },
+  },
 ]);
