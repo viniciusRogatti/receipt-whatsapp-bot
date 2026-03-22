@@ -3,28 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Debug OCR de Canhotos</title>
+    <title>Depuração do OCR de canhotos</title>
     <link rel="stylesheet" href="/debug-ui/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="sidebar-block">
-          <p class="eyebrow">Local Debug</p>
+          <p class="eyebrow">Depuração local</p>
           <h1>OCR de Canhotos</h1>
           <p class="muted">
-            Faça upload ou selecione uma imagem de teste para acompanhar o pipeline visual passo a passo.
+            Envie ou selecione uma imagem de teste para acompanhar o fluxo visual passo a passo.
           </p>
         </div>
 
         <div class="sidebar-block">
-          <h2>Upload manual</h2>
+          <h2>Envio manual</h2>
           <form id="upload-form" class="stack">
             <label class="file-input">
               <span>Selecionar imagem</span>
               <input id="upload-input" type="file" name="file" accept="image/*" />
             </label>
-            <button class="primary-button" type="submit">Analisar upload</button>
+            <button class="primary-button" type="submit">Analisar imagem enviada</button>
           </form>
         </div>
 
@@ -33,7 +33,7 @@
             <h2>Imagens da pasta de testes</h2>
             <div class="button-row">
               <button id="refresh-images" class="ghost-button" type="button">Atualizar</button>
-              <button id="process-all" class="primary-button" type="button">Processar Fila (Ao Vivo)</button>
+              <button id="process-all" class="primary-button" type="button">Processar fila ao vivo</button>
             </div>
           </div>
           <div id="test-image-list" class="image-list"></div>
@@ -42,8 +42,8 @@
         <div class="sidebar-block">
           <h2>Status</h2>
           <div id="job-status" class="status-card">
-            <p class="status-title">Aguardando analise</p>
-            <p class="muted">Nenhum job em execucao.</p>
+            <p class="status-title">Aguardando análise</p>
+            <p class="muted">Nenhum processo em execução.</p>
           </div>
         </div>
       </aside>
@@ -52,7 +52,7 @@
         <section class="panel">
           <div class="section-header">
             <div>
-              <p class="eyebrow">Pipeline</p>
+              <p class="eyebrow">Fluxo</p>
               <h2>Acompanhamento ao vivo</h2>
             </div>
             <div id="summary-chips" class="chips"></div>

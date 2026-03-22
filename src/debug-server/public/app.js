@@ -61,13 +61,46 @@ const setStatusCard = (title, description) => {
   `;
 };
 
+const STATUS_LABELS = {
+  idle: 'Aguardando',
+  queued: 'Na fila',
+  running: 'Em processamento',
+  processing: 'Em processamento',
+  completed: 'Concluído',
+  failed: 'Falhou',
+  success: 'Sucesso',
+  error: 'Erro',
+  warning: 'Aviso',
+  skipped: 'Ignorado',
+  approved: 'Aprovado',
+  review: 'Em revisão',
+  rejected: 'Rejeitado',
+  valid: 'Válido',
+  invalid: 'Inválido',
+};
+
+const LOG_LEVEL_LABELS = {
+  info: 'Informação',
+  debug: 'Depuração',
+  warn: 'Aviso',
+  warning: 'Aviso',
+  error: 'Erro',
+};
+
+const translateLabel = (value, dictionary, fallback = '-') => {
+  const raw = String(value || '').trim();
+  if (!raw) return fallback;
+  const normalized = raw.toLowerCase();
+  return dictionary[normalized] || raw;
+};
+
 const syncQueueControls = () => {
   if (!elements.processAll) return;
 
   elements.processAll.disabled = state.processandoFila;
   elements.processAll.textContent = state.processandoFila
-    ? `Processando Fila (${state.filaDeProcessamento.length} restantes)`
-    : 'Processar Fila (Ao Vivo)';
+    ? `Processando fila (${state.filaDeProcessamento.length} restantes)`
+    : 'Processar fila ao vivo';
 };
 
 const stopQueueProcessing = () => {
@@ -116,7 +149,7 @@ const renderProgress = (stages = {}) => {
     return `
       <article class="progress-card ${escapeHtml(stage.status || 'idle')}">
         <span class="label">${escapeHtml(stageLabels[stageKey])}</span>
-        <strong>${escapeHtml(stage.status || 'idle')}</strong>
+        <strong>${escapeHtml(translateLabel(stage.status || 'idle', STATUS_LABELS, 'Aguardando'))}</strong>
         <p class="muted">${escapeHtml(stage.message || 'Aguardando.')}</p>
       </article>
     `;
@@ -132,7 +165,7 @@ const renderLogs = (logs = []) => {
   elements.logList.innerHTML = logs.slice().reverse().map((entry) => `
     <article class="log-item">
       <div>
-        <strong>${escapeHtml(entry.level || 'info')}</strong>
+        <strong>${escapeHtml(translateLabel(entry.level || 'info', LOG_LEVEL_LABELS, 'Informação'))}</strong>
         <p>${escapeHtml(entry.message || '')}</p>
       </div>
       <span class="log-time">${escapeHtml(new Date(entry.at).toLocaleTimeString())}</span>
@@ -154,11 +187,11 @@ const renderSummary = async (session) => {
   const texts = session.texts || {};
 
   elements.summaryChips.innerHTML = `
-    <span class="chip ${escapeHtml(summary.classification || 'neutral')}">${escapeHtml(summary.classification || 'sem classificacao')}</span>
+    <span class="chip ${escapeHtml(summary.classification || 'neutral')}">${escapeHtml(translateLabel(summary.classification, STATUS_LABELS, 'Sem classificação'))}</span>
     <span class="chip neutral">NF: ${escapeHtml(summary.nf || 'nao detectada')}</span>
     <span class="chip neutral">Confianca: ${escapeHtml(summary.nfConfidence ?? '-')}</span>
     <span class="chip neutral">Score: ${escapeHtml(summary.businessScore ?? '-')}</span>
-    <span class="chip neutral">Validacao: ${escapeHtml(session.validation ? session.validation.status : '-')}</span>
+    <span class="chip neutral">Validacao: ${escapeHtml(translateLabel(session.validation ? session.validation.status : '-', STATUS_LABELS, '-'))}</span>
   `;
 
   elements.summaryGrid.innerHTML = `
@@ -168,7 +201,7 @@ const renderSummary = async (session) => {
     </article>
     <article class="summary-card">
       <span class="label">Classificacao</span>
-      <strong>${escapeHtml(summary.classification)}</strong>
+      <strong>${escapeHtml(translateLabel(summary.classification, STATUS_LABELS, '-'))}</strong>
     </article>
     <article class="summary-card">
       <span class="label">NF extraida</span>
@@ -288,13 +321,13 @@ const pollJob = async (jobId) => {
     const job = await response.json();
 
     if (!response.ok) {
-      throw new Error(job.error || 'Falha ao consultar job de debug.');
+      throw new Error(job.error || 'Falha ao consultar o processo de depuração.');
     }
 
     renderProgress(job.stages);
     renderLogs(job.logs);
     setStatusCard(
-      `Job ${job.status}`,
+      `Processo ${translateLabel(job.status, STATUS_LABELS, 'em andamento')}`,
       `${job.sourceLabel || 'Imagem'} em processamento local.`,
     );
 
@@ -313,20 +346,20 @@ const pollJob = async (jobId) => {
 
     if (job.status === 'failed') {
       stopQueueProcessing();
-      setStatusCard('Falha no job', job.error ? job.error.message : 'Erro desconhecido.');
+      setStatusCard('Falha no processo', job.error ? job.error.message : 'Erro desconhecido.');
       return;
     }
 
     state.pollTimer = window.setTimeout(() => pollJob(jobId), 1000);
   } catch (error) {
     stopQueueProcessing();
-    setStatusCard('Erro ao atualizar job', error.message);
+    setStatusCard('Erro ao atualizar o processo', error.message);
   }
 };
 
 const createTestImageJob = async () => {
   if (!state.selectedImageId) {
-    setStatusCard('Selecione uma imagem', 'Escolha uma imagem da pasta de testes antes de iniciar a analise.');
+    setStatusCard('Selecione uma imagem', 'Escolha uma imagem da pasta de testes antes de iniciar a análise.');
     return;
   }
 
@@ -344,11 +377,11 @@ const createTestImageJob = async () => {
   const job = await response.json();
 
   if (!response.ok) {
-    throw new Error(job.error || 'Falha ao criar job para imagem de teste.');
+    throw new Error(job.error || 'Falha ao criar processo para a imagem de teste.');
   }
 
   state.currentJobId = job.id;
-  setStatusCard('Job criado', `Imagem ${state.selectedImageId} enviada para analise.`);
+  setStatusCard('Processo criado', `Imagem ${state.selectedImageId} enviada para análise.`);
   renderProgress(job.stages);
   renderLogs(job.logs);
   pollJob(job.id);
@@ -366,11 +399,11 @@ const createUploadJob = async (file) => {
   const job = await response.json();
 
   if (!response.ok) {
-    throw new Error(job.error || 'Falha ao criar job para o upload.');
+    throw new Error(job.error || 'Falha ao criar processo para o envio.');
   }
 
   state.currentJobId = job.id;
-  setStatusCard('Upload recebido', `${file.name} enviado para analise.`);
+  setStatusCard('Arquivo recebido', `${file.name} enviado para análise.`);
   renderProgress(job.stages);
   renderLogs(job.logs);
   pollJob(job.id);
@@ -455,6 +488,6 @@ elements.processAll.addEventListener('click', () => {
 
 renderProgress({});
 renderLogs([]);
-setStatusCard('Aguardando analise', 'Selecione uma imagem ou envie um novo canhoto.');
+setStatusCard('Aguardando análise', 'Selecione uma imagem ou envie um novo canhoto.');
 syncQueueControls();
 loadTestImages().catch((error) => setStatusCard('Erro', error.message));
