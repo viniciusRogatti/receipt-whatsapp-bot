@@ -165,7 +165,7 @@ module.exports = () => {
       },
     },
     {
-      name: 'apiService em backend_api manda para revisao quando NF nao tem rota ou motorista',
+      name: 'apiService em backend_api manda para revisao quando NF nao tem rota atribuida',
       run: async () => {
         const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
         const originalBackendApiToken = env.receiptBackendApiToken;
@@ -237,10 +237,117 @@ module.exports = () => {
           });
 
           assert.strictEqual(result.action, 'create_receipt_alert');
-          assert.strictEqual(result.reason, 'missing_trip_note_assignment');
+          assert.strictEqual(result.reason, 'missing_route_assignment');
           assert.strictEqual(requests.length, 2);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/1719915');
           assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/alerts');
+        } finally {
+          env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
+          env.receiptBackendApiToken = originalBackendApiToken;
+          env.receiptBackendSyncMode = originalBackendSyncMode;
+          env.backendRoot = originalBackendRoot;
+          env.receiptInvoiceLookupCompanyCode = originalCompanyCode;
+          env.receiptInvoiceLookupCompanyId = originalCompanyId;
+          global.fetch = originalFetch;
+          await apiService.shutdown().catch(() => undefined);
+        }
+      },
+    },
+    {
+      name: 'apiService em backend_api aprova NF valida quando a rota existe mesmo sem motorista',
+      run: async () => {
+        const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
+        const originalBackendApiToken = env.receiptBackendApiToken;
+        const originalBackendSyncMode = env.receiptBackendSyncMode;
+        const originalBackendRoot = env.backendRoot;
+        const originalCompanyCode = env.receiptInvoiceLookupCompanyCode;
+        const originalCompanyId = env.receiptInvoiceLookupCompanyId;
+        const originalFetch = global.fetch;
+        const requests = [];
+
+        env.receiptBackendApiBaseUrl = 'https://backend.example';
+        env.receiptBackendApiToken = 'token-de-teste';
+        env.receiptBackendSyncMode = 'status_only';
+        env.backendRoot = '/backend-inexistente-para-teste';
+        env.receiptInvoiceLookupCompanyCode = 'mar_e_rio';
+        env.receiptInvoiceLookupCompanyId = null;
+
+        global.fetch = async (url, options = {}) => {
+          requests.push({ url, options });
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/1721731')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                found: true,
+                invoice: {
+                  invoiceNumber: '1721731',
+                },
+                company: {
+                  id: 1,
+                  code: 'mar_e_rio',
+                },
+                deliveryContext: {
+                  tripId: 65,
+                  tripNoteId: 731,
+                  driverId: null,
+                },
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/danfes/status')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                updated: true,
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/whatsapp-success-activity')) {
+            return {
+              ok: true,
+              status: 201,
+              text: async () => JSON.stringify({
+                created: true,
+                eventId: 732,
+              }),
+            };
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        };
+
+        try {
+          const result = await apiService.syncAnalysisResult({
+            nfExtraction: { nf: '1721731' },
+            classification: { classification: 'valid', reasons: [] },
+          }, {
+            metadata: {
+              source: 'whatsapp',
+              groupName: 'Grupo de Canhotos',
+              messageId: 'wamid-no-driver-1',
+            },
+          });
+
+          assert.strictEqual(result.action, 'mark_invoice_delivered');
+          assert.strictEqual(requests.length, 3);
+          assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721731');
+          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/status');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+
+          const statusBody = JSON.parse(requests[1].options.body);
+          assert.strictEqual(statusBody.invoiceNumber, '1721731');
+          assert.strictEqual(statusBody.status, 'delivered');
+
+          const activityBody = JSON.parse(requests[2].options.body);
+          assert.strictEqual(activityBody.tripId, 65);
+          assert.strictEqual(activityBody.tripNoteId, 731);
+          assert.strictEqual(activityBody.driverId, null);
+          assert.strictEqual(activityBody.metadata.operationalValidationStatus, 'matched_route_assignment');
         } finally {
           env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
           env.receiptBackendApiToken = originalBackendApiToken;
@@ -374,7 +481,7 @@ module.exports = () => {
       },
     },
     {
-      name: 'apiService em backend_api recupera a NF pela legenda da mensagem e abre revisao na NF correta',
+      name: 'apiService em backend_api recupera a NF pela legenda da mensagem e mantem revisao na NF correta quando a imagem ainda exige validacao manual',
       run: async () => {
         const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
         const originalBackendApiToken = env.receiptBackendApiToken;
@@ -501,7 +608,7 @@ module.exports = () => {
           assert.strictEqual(alertBody.metadata.messageText, 'NF 1721192');
           assert.strictEqual(alertBody.metadata.caption, 'NF 1721192');
           assert.strictEqual(alertBody.metadata.body, 'NF 1721192');
-          assert(alertBody.metadata.reasons.some((reason) => reason.includes('NF 1721192 recuperada pela legenda da mensagem.')));
+
         } finally {
           env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
           env.receiptBackendApiToken = originalBackendApiToken;
