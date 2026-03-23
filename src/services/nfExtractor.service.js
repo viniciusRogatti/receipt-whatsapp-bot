@@ -13,6 +13,10 @@ const receiptNfOcrService = require('./receiptPipeline/receiptNfOcr.service');
 
 const NF_MARKER_REGEX = /\b(?:nf\s*e|nfe|nota fiscal(?: eletronica)?)\b/gi;
 const NUMBER_MARKER_REGEX = /\b(?:numero|n\s*o|nro|no)\b/gi;
+const SERIES_MARKER_FRAGMENT = 'ser(?:ie|1e|le)';
+const SERIES_MARKER_REGEX = new RegExp(`\\b(?:${SERIES_MARKER_FRAGMENT})\\b`, 'gi');
+const SERIES_ONE_REGEX = new RegExp(`\\b(?:${SERIES_MARKER_FRAGMENT})\\s*(?:1|i)\\b`, 'gi');
+const NF_FIELD_ANCHOR_ROIS = ['nf_header', 'nf_series_line', 'nf_block', 'nf_block_wide', 'nf_number_line', 'nf_number_tight'];
 const buildExpectedDigitRegexFragment = () => (
   (Array.isArray(env.ocrExpectedNfLengths) && env.ocrExpectedNfLengths.length
     ? env.ocrExpectedNfLengths
@@ -130,7 +134,67 @@ const buildLineWindows = (source) => {
 const inferContext = (text) => ({
   foundNfe: collectRegexMatches(text, NF_MARKER_REGEX).length > 0,
   foundNumeroMarker: collectRegexMatches(text, NUMBER_MARKER_REGEX).length > 0,
+  foundSeriesMarker: collectRegexMatches(text, SERIES_MARKER_REGEX).length > 0,
+  foundSeriesOne: collectRegexMatches(text, SERIES_ONE_REGEX).length > 0,
 });
+
+const resolveRequestedRoiId = (source = {}) => (
+  source.meta && source.meta.requestedRoiId
+    ? source.meta.requestedRoiId
+    : source.requestedRoiId || null
+);
+
+const resolveSourceVariantId = (source = {}) => (
+  source.sourceVariantId
+  || (source.meta && source.meta.sourceVariantId)
+  || null
+);
+
+const mergeFieldContext = (baseContext = {}, fieldAnchorSupport = {}) => {
+  const anchorSupport = fieldAnchorSupport || {};
+  const context = {
+    foundNfe: !!(baseContext.foundNfe || anchorSupport.foundNfe),
+    foundNumeroMarker: !!baseContext.foundNumeroMarker,
+    foundSeriesMarker: !!(baseContext.foundSeriesMarker || anchorSupport.foundSeriesMarker),
+    foundSeriesOne: !!(baseContext.foundSeriesOne || anchorSupport.foundSeriesOne),
+  };
+  context.fieldAnchorValidated = context.foundNfe && context.foundSeriesOne;
+  return context;
+};
+
+const buildFieldAnchorSupportMap = (sources = []) => sources.reduce((accumulator, source) => {
+  if (String(source.sourceType || '').indexOf('nf_roi') < 0) return accumulator;
+
+  const requestedRoiId = resolveRequestedRoiId(source);
+  if (requestedRoiId && !NF_FIELD_ANCHOR_ROIS.includes(requestedRoiId)) return accumulator;
+
+  const sourceVariantId = resolveSourceVariantId(source);
+  if (!sourceVariantId) return accumulator;
+
+  const searchableText = buildSearchableText(source.textRaw || source.textNormalized || '');
+  const context = inferContext(searchableText);
+  if (!context.foundNfe && !context.foundSeriesMarker && !context.foundSeriesOne) return accumulator;
+
+  if (!accumulator[sourceVariantId]) {
+    accumulator[sourceVariantId] = {
+      foundNfe: false,
+      foundSeriesMarker: false,
+      foundSeriesOne: false,
+      supportingRois: [],
+    };
+  }
+
+  const entry = accumulator[sourceVariantId];
+  entry.foundNfe = entry.foundNfe || context.foundNfe;
+  entry.foundSeriesMarker = entry.foundSeriesMarker || context.foundSeriesMarker;
+  entry.foundSeriesOne = entry.foundSeriesOne || context.foundSeriesOne;
+
+  if (requestedRoiId && entry.supportingRois.indexOf(requestedRoiId) < 0) {
+    entry.supportingRois.push(requestedRoiId);
+  }
+
+  return accumulator;
+}, {});
 
 const computeDistanceBonus = (digitIndex, markers = [], nearBonus, midBonus) => {
   if (!markers.length) return 0;
@@ -448,6 +512,7 @@ const buildCandidate = ({
   fuzzyPattern = false,
   fuzzyMeta = null,
   overflowPattern = false,
+  fieldAnchorSupport = null,
 }) => {
   const digits = digitsOnly(nf);
   const searchableWindow = String(
@@ -458,8 +523,16 @@ const buildCandidate = ({
   const numberMarkers = collectRegexMatches(searchableWindow, NUMBER_MARKER_REGEX);
   const digitMatches = collectRegexMatches(searchableWindow, DIGIT_GROUP_REGEX);
   const digitMatch = digitMatches.find((item) => digitsOnly(item.match) === digits) || digitMatches[0] || { index: 0 };
-  const context = inferContext(searchableWindow);
-  const hasContextualNfMarker = context.foundNfe || context.foundNumeroMarker;
+  const baseContext = inferContext(searchableWindow);
+  const context = mergeFieldContext(baseContext, fieldAnchorSupport);
+  const supportRois = Array.isArray(fieldAnchorSupport && fieldAnchorSupport.supportingRois)
+    ? fieldAnchorSupport.supportingRois
+    : [];
+  const inheritedAnchorSupport = {
+    foundNfe: !baseContext.foundNfe && !!(fieldAnchorSupport && fieldAnchorSupport.foundNfe),
+    foundSeriesOne: !baseContext.foundSeriesOne && !!(fieldAnchorSupport && fieldAnchorSupport.foundSeriesOne),
+  };
+  const hasContextualNfMarker = context.foundNfe || context.foundNumeroMarker || context.foundSeriesOne;
   const dateLikeEvidence = !hasContextualNfMarker && looksLikeDateLikeEvidence({
     digits,
     rawWindowText: windowText || evidence || '',
@@ -477,6 +550,28 @@ const buildCandidate = ({
   if (context.foundNumeroMarker) {
     confidence += 0.12;
     reasons.push('marcador_numero');
+  }
+  if (context.foundSeriesOne) {
+    confidence += 0.16;
+    reasons.push('contexto_serie_1');
+  } else if (context.foundSeriesMarker) {
+    confidence += 0.07;
+    reasons.push('marcador_serie');
+  }
+  if (inheritedAnchorSupport.foundNfe) {
+    confidence += 0.05;
+    reasons.push('apoio_nfe_mesma_regiao');
+  }
+  if (inheritedAnchorSupport.foundSeriesOne) {
+    confidence += 0.07;
+    reasons.push('apoio_serie_mesma_regiao');
+  }
+  if (context.fieldAnchorValidated) {
+    confidence += 0.16;
+    reasons.push('campo_nf_ancorado');
+  } else {
+    confidence -= 0.34;
+    reasons.push('sem_ancoras_completas_do_campo_nf');
   }
   if (lineShort) {
     confidence += 0.08;
@@ -544,21 +639,27 @@ const buildCandidate = ({
     targetRole: source.targetRole,
     confidence,
     context,
+    fieldAnchorValidated: context.fieldAnchorValidated,
     dateLikeEvidence,
     evidence: truncateText(evidence || windowText || searchableWindow, 180),
     reasons,
-    requestedRoiId: source.meta && source.meta.requestedRoiId ? source.meta.requestedRoiId : null,
+    requestedRoiId: resolveRequestedRoiId(source),
     roiId: source.meta && source.meta.roiId ? source.meta.roiId : null,
-    sourceVariantId: source.sourceVariantId || (source.meta && source.meta.sourceVariantId) || null,
+    sourceVariantId: resolveSourceVariantId(source),
+    fieldAnchorSupportRois: supportRois,
     transformId: source.meta && source.meta.transformId ? source.meta.transformId : null,
     phase: source.meta && source.meta.phase ? source.meta.phase : null,
   };
 };
 
-const extractCandidatesFromTextSource = (source) => {
+const extractCandidatesFromTextSource = (source, { fieldAnchorSupportMap = {} } = {}) => {
   const windows = buildLineWindows(source);
   const candidates = [];
   const seen = {};
+  const sourceVariantId = resolveSourceVariantId(source);
+  const fieldAnchorSupport = sourceVariantId
+    ? fieldAnchorSupportMap[sourceVariantId] || null
+    : null;
 
   windows.forEach(({ rawText, searchableText }) => {
     const windowContext = inferContext(searchableText);
@@ -581,6 +682,7 @@ const extractCandidatesFromTextSource = (source) => {
           windowText: rawText,
           searchableWindowText: searchableText,
           directPattern: true,
+          fieldAnchorSupport,
         }));
       });
     });
@@ -600,6 +702,7 @@ const extractCandidatesFromTextSource = (source) => {
         method: 'window_context',
         windowText: rawText,
         searchableWindowText: searchableText,
+        fieldAnchorSupport,
       }));
     });
 
@@ -629,6 +732,7 @@ const extractCandidatesFromTextSource = (source) => {
             mappedCount: match.mappedCount,
             droppedCount: match.droppedCount,
           },
+          fieldAnchorSupport,
         }));
       });
 
@@ -650,6 +754,7 @@ const extractCandidatesFromTextSource = (source) => {
               mappedCount: match.mappedCount,
               droppedCount: match.droppedCount,
             },
+            fieldAnchorSupport,
           }));
         });
       }
@@ -667,6 +772,7 @@ const extractCandidatesFromTextSource = (source) => {
             windowText: rawText,
             searchableWindowText: searchableText,
             overflowPattern: true,
+            fieldAnchorSupport,
           }));
         });
       }
@@ -709,7 +815,10 @@ const aggregateCandidates = (candidates = []) => Object.keys(
   const contexts = {
     foundNfe: evidence.some((item) => item.context.foundNfe),
     foundNumeroMarker: evidence.some((item) => item.context.foundNumeroMarker),
+    foundSeriesMarker: evidence.some((item) => item.context.foundSeriesMarker),
+    foundSeriesOne: evidence.some((item) => item.context.foundSeriesOne),
   };
+  contexts.fieldAnchorValidated = contexts.foundNfe && contexts.foundSeriesOne;
   const supportBonus = Math.min(0.15, Math.max(0, uniqueSourceIds.length - 1) * 0.05);
   const roiBonus = Math.min(0.15, Math.max(0, uniqueRois.length - 1) * 0.05);
   const variantBonus = Math.min(0.12, Math.max(0, uniqueVariants.length - 1) * 0.04);
@@ -724,31 +833,41 @@ const aggregateCandidates = (candidates = []) => Object.keys(
     && uniqueRois.length >= 2
     && uniqueRois.includes('nf_number_line')
   );
-  const contextBonus = contexts.foundNfe && contexts.foundNumeroMarker ? 0.06 : contexts.foundNfe ? 0.03 : 0;
+  const contextBonus = contexts.fieldAnchorValidated
+    ? 0.14
+    : contexts.foundNfe && contexts.foundNumeroMarker
+      ? 0.06
+      : contexts.foundNfe || contexts.foundSeriesOne
+        ? 0.03
+        : 0;
   const digitDominantShortEvidence = hasDigitDominantShortEvidence(nf, evidence);
   const digitDominantRoiBonus = digitDominantShortEvidence ? 0.12 : 0;
   const hasDateLikeEvidence = evidence.some((item) => item.dateLikeEvidence);
-  const contextlessPenalty = contexts.foundNfe || contexts.foundNumeroMarker
+  const contextlessPenalty = contexts.foundNfe || contexts.foundNumeroMarker || contexts.foundSeriesOne
     ? 0
-    : strongTightConsensus || strongLineConsensus
+    : (strongTightConsensus || strongLineConsensus) && contexts.fieldAnchorValidated
       ? 0
       : digitDominantShortEvidence
         ? 0.06
       : supportsPreciseTemplate
         ? 0.05
         : 0.28;
+  const fieldAnchorPenalty = contexts.fieldAnchorValidated ? 0 : 0.42;
   const blockOnlyPenalty = (
     !contexts.foundNfe
     && !contexts.foundNumeroMarker
+    && !contexts.foundSeriesOne
     && !supportsPreciseTemplate
     && uniqueRois.length === 1
     && uniqueRois[0] === 'nf_block'
   ) ? 0.06 : 0;
-  const dateLikePenalty = hasDateLikeEvidence && !contexts.foundNfe && !contexts.foundNumeroMarker
+  const dateLikePenalty = hasDateLikeEvidence && !contexts.fieldAnchorValidated
     ? (supportsPreciseTemplate ? 0.08 : 0.18)
     : 0;
-  const lengthPenalty = nf.length <= 6 && !contexts.foundNfe && !contexts.foundNumeroMarker ? 0.06 : 0;
-  const preciseTemplateBonus = supportsPreciseTemplate ? 0.08 : 0;
+  const lengthPenalty = nf.length <= 6 && !contexts.fieldAnchorValidated ? 0.06 : 0;
+  const preciseTemplateBonus = supportsPreciseTemplate
+    ? contexts.fieldAnchorValidated ? 0.08 : 0.03
+    : 0;
   let confidence = Number(Math.max(0, Math.min(
     0.99,
     maxConfidence
@@ -758,18 +877,22 @@ const aggregateCandidates = (candidates = []) => Object.keys(
       + contextBonus
       + digitDominantRoiBonus
       + preciseTemplateBonus
+      - fieldAnchorPenalty
       - contextlessPenalty
       - blockOnlyPenalty
       - dateLikePenalty
       - lengthPenalty,
   )).toFixed(2));
-  if (strongTightConsensus) {
+  if (strongTightConsensus && contexts.fieldAnchorValidated) {
     confidence = Math.max(confidence, 0.99);
-  } else if (strongLineConsensus) {
+  } else if (strongLineConsensus && contexts.fieldAnchorValidated) {
     confidence = Math.max(confidence, 0.96);
   }
   const sortedEvidence = evidence.slice().sort((left, right) => right.confidence - left.confidence);
   const bestEvidence = sortedEvidence[0] || null;
+  const decisionReason = Array.from(new Set(
+    sortedEvidence.flatMap((item) => item.reasons || []),
+  ));
 
   return {
     nf,
@@ -781,7 +904,8 @@ const aggregateCandidates = (candidates = []) => Object.keys(
     precisionScore,
     sourceTypes,
     context: contexts,
-    decisionReason: bestEvidence ? bestEvidence.reasons.slice() : [],
+    fieldAnchorValidated: contexts.fieldAnchorValidated,
+    decisionReason,
     supportingTexts: sortedEvidence.map((item) => item.evidence).slice(0, 6),
     supportingRois: uniqueRois,
     supportingVariants: uniqueVariants,
@@ -797,6 +921,10 @@ const aggregateCandidates = (candidates = []) => Object.keys(
     return String(left.nf).localeCompare(String(right.nf));
   });
 
+const selectValidatedBestCandidate = (candidates = []) => (
+  candidates.find((candidate) => candidate && candidate.context && candidate.context.fieldAnchorValidated) || null
+);
+
 const shouldRunFallbackPhase = (validation, candidate) => {
   if (!validation || !validation.canRunNfFallback) return false;
   if (!candidate) return true;
@@ -806,12 +934,12 @@ const shouldRunFallbackPhase = (validation, candidate) => {
 const shouldRetryPrimaryPhase = (candidate) => {
   if (!candidate) return true;
   if (Number(candidate.confidence || 0) < BUSINESS_THRESHOLDS.validNfConfidence) return true;
-  if (!candidate.context || (!candidate.context.foundNfe && !candidate.context.foundNumeroMarker)) return true;
+  if (!candidate.context || !candidate.context.fieldAnchorValidated) return true;
   return false;
 };
 
 const shouldRunPrecisionConfirmation = (candidates = []) => {
-  const best = candidates[0] || null;
+  const best = selectValidatedBestCandidate(candidates);
   if (!best) return true;
   return Number(best.precisionScore || 0) === 0;
 };
@@ -868,13 +996,15 @@ module.exports = {
       }))),
     });
     let rawCandidates = [];
+    let fieldAnchorSupportMap = buildFieldAnchorSupportMap(documents);
 
     documents.forEach((document) => {
-      rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document));
+      rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document, { fieldAnchorSupportMap }));
     });
 
     let candidates = aggregateCandidates(rawCandidates);
-    let best = candidates[0] || null;
+    let rankedBest = candidates[0] || null;
+    let best = selectValidatedBestCandidate(candidates);
 
     if (!fastMode && canRunRoiOcr && shouldRetryPrimaryPhase(best)) {
       const retryPrimaryPhase = await receiptNfOcrService.runNfRoiOcrPhase({
@@ -897,15 +1027,18 @@ module.exports = {
         }))),
       });
       rawCandidates = [];
+      fieldAnchorSupportMap = buildFieldAnchorSupportMap(documents);
       documents.forEach((document) => {
-        rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document));
+        rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document, { fieldAnchorSupportMap }));
       });
       candidates = aggregateCandidates(rawCandidates);
-      best = candidates[0] || null;
+      rankedBest = candidates[0] || null;
+      best = selectValidatedBestCandidate(candidates);
     }
 
     if (!fastMode && canRunRoiOcr && shouldRunPrecisionConfirmation(candidates)) {
-      const bestEvidence = best && Array.isArray(best.evidence) ? best.evidence[0] : null;
+      const confirmSeed = rankedBest || best;
+      const bestEvidence = confirmSeed && Array.isArray(confirmSeed.evidence) ? confirmSeed.evidence[0] : null;
       const confirmPhase = await receiptNfOcrService.runNfPrecisionConfirmPhase({
         preprocess: payload.preprocess,
         orientationProbe: payload.orientationProbe,
@@ -929,11 +1062,13 @@ module.exports = {
         }))),
       });
       rawCandidates = [];
+      fieldAnchorSupportMap = buildFieldAnchorSupportMap(documents);
       documents.forEach((document) => {
-        rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document));
+        rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document, { fieldAnchorSupportMap }));
       });
       candidates = aggregateCandidates(rawCandidates);
-      best = candidates[0] || null;
+      rankedBest = candidates[0] || null;
+      best = selectValidatedBestCandidate(candidates);
     }
 
     const shouldRunFallback = fastMode
@@ -961,11 +1096,13 @@ module.exports = {
         }))),
       });
       rawCandidates = [];
+      fieldAnchorSupportMap = buildFieldAnchorSupportMap(documents);
       documents.forEach((document) => {
-        rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document));
+        rawCandidates.push.apply(rawCandidates, extractCandidatesFromTextSource(document, { fieldAnchorSupportMap }));
       });
       candidates = aggregateCandidates(rawCandidates);
-      best = candidates[0] || null;
+      rankedBest = candidates[0] || null;
+      best = selectValidatedBestCandidate(candidates);
     }
 
     return {
@@ -976,6 +1113,9 @@ module.exports = {
       context: best ? best.context : {
         foundNfe: false,
         foundNumeroMarker: false,
+        foundSeriesMarker: false,
+        foundSeriesOne: false,
+        fieldAnchorValidated: false,
       },
       supportCount: best ? best.supportCount : 0,
       roiSupportCount: best ? best.roiSupportCount : 0,

@@ -41,21 +41,34 @@ const buildOperationalFailureReplyMessage = () => (
   'Consegui ler a imagem, mas nao consegui registrar o resultado no sistema agora. Tente novamente em instantes.'
 );
 
-const buildMessageMetadata = (message = {}) => ({
-  source: 'whatsapp',
-  sourceName: 'whatsapp',
-  groupId: message.groupId || message.chatId || null,
-  groupName: message.groupName || null,
-  chatId: message.chatId || null,
-  messageId: message.id || null,
-  mediaId: message.mediaId || null,
-  sender: message.sender || null,
-  senderId: message.senderId || null,
-  senderPhone: message.senderPhone || null,
-  senderName: message.senderName || null,
-  senderContactName: message.senderContactName || null,
-  messageTimestamp: message.timestamp || null,
-});
+const normalizeMessageText = (value) => String(value || '').trim();
+
+const buildMessageMetadata = (message = {}) => {
+  const messageText = normalizeMessageText(
+    message.messageText
+    || message.caption
+    || message.body,
+  );
+
+  return {
+    source: 'whatsapp',
+    sourceName: 'whatsapp',
+    groupId: message.groupId || message.chatId || null,
+    groupName: message.groupName || null,
+    chatId: message.chatId || null,
+    messageId: message.id || null,
+    mediaId: message.mediaId || null,
+    sender: message.sender || null,
+    senderId: message.senderId || null,
+    senderPhone: message.senderPhone || null,
+    senderName: message.senderName || null,
+    senderContactName: message.senderContactName || null,
+    messageTimestamp: message.timestamp || null,
+    messageText: messageText || null,
+    caption: messageText || null,
+    body: messageText || null,
+  };
+};
 
 module.exports = {
   buildReplyMessage,
@@ -89,6 +102,9 @@ module.exports = {
               senderName: message && message.senderName ? message.senderName : null,
               senderContactName: message && message.senderContactName ? message.senderContactName : null,
               messageTimestamp: message && message.timestamp ? message.timestamp : null,
+              messageText: messageMetadata.messageText || null,
+              caption: messageMetadata.caption || null,
+              body: messageMetadata.body || null,
               source: 'whatsapp',
               sourceName: 'whatsapp',
             },

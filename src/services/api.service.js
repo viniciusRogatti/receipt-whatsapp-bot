@@ -42,6 +42,7 @@ const IGNORABLE_REVIEW_REASONS_FOR_AUTO_PROMOTION = new Set([
   'ha indicios estruturais bons, mas falta confianca para aprovar automaticamente o canhoto.',
   'a nf foi localizada, mas ainda ha ambiguidade residual na leitura estrutural da imagem.',
 ]);
+const MESSAGE_TEXT_METADATA_KEYS = ['messageText', 'caption', 'body'];
 
 const toDateOnly = (value) => {
   if (!value && value !== 0) return null;
@@ -534,6 +535,156 @@ const promoteMissingReceiptDateReview = (analysis = {}) => {
       }),
     }),
   });
+};
+
+const resolveExpectedInvoiceLengths = () => {
+  const parsed = Array.isArray(env.ocrExpectedNfLengths)
+    ? env.ocrExpectedNfLengths
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => Math.trunc(value))
+    : [];
+
+  return parsed.length
+    ? Array.from(new Set(parsed)).sort((left, right) => left - right)
+    : [7];
+};
+
+const collectInvoiceCandidatesFromMessageText = (metadata = {}) => {
+  const expectedLengths = new Set(resolveExpectedInvoiceLengths());
+  const candidates = new Set();
+
+  MESSAGE_TEXT_METADATA_KEYS.forEach((key) => {
+    const text = normalizeText(metadata && metadata[key]);
+    if (!text) return;
+
+    const digitGroups = text.match(/\d+/g) || [];
+    digitGroups.forEach((digits) => {
+      if (expectedLengths.has(digits.length)) {
+        candidates.add(digits);
+      }
+    });
+  });
+
+  return Array.from(candidates.values());
+};
+
+const buildMessageTextInvoiceRescueReason = ({
+  rescuedInvoiceNumber,
+  originalInvoiceNumber = null,
+}) => (
+  originalInvoiceNumber && originalInvoiceNumber !== rescuedInvoiceNumber
+    ? `NF ${rescuedInvoiceNumber} recuperada pela legenda da mensagem. OCR original leu ${originalInvoiceNumber}.`
+    : `NF ${rescuedInvoiceNumber} recuperada pela legenda da mensagem.`
+);
+
+const buildRescuedAnalysisFromMessageText = (analysis = {}, {
+  rescuedInvoiceNumber,
+  originalInvoiceNumber = null,
+  messageTextCandidates = [],
+} = {}) => {
+  const currentExtraction = analysis.nfExtraction && typeof analysis.nfExtraction === 'object'
+    ? analysis.nfExtraction
+    : {};
+  const currentClassification = analysis.classification && typeof analysis.classification === 'object'
+    ? analysis.classification
+    : {};
+  const currentMetrics = currentClassification.metrics && typeof currentClassification.metrics === 'object'
+    ? currentClassification.metrics
+    : {};
+  const currentReasons = Array.isArray(currentClassification.reasons)
+    ? currentClassification.reasons.filter(Boolean)
+    : [];
+  const rescueReason = buildMessageTextInvoiceRescueReason({
+    rescuedInvoiceNumber,
+    originalInvoiceNumber,
+  });
+
+  return Object.assign({}, analysis, {
+    nfExtraction: Object.assign({}, currentExtraction, {
+      nf: rescuedInvoiceNumber,
+      method: currentExtraction.method
+        ? `${currentExtraction.method}+message_text_rescue`
+        : 'message_text_rescue',
+      messageTextRescued: true,
+      originalNf: originalInvoiceNumber || normalizeInvoiceNumber(currentExtraction.nf) || null,
+    }),
+    classification: Object.assign({}, currentClassification, {
+      classification: 'review',
+      reasons: Array.from(new Set([
+        ...currentReasons,
+        rescueReason,
+      ])),
+      metrics: Object.assign({}, currentMetrics, {
+        messageTextInvoiceRescued: true,
+        messageTextInvoiceNumber: rescuedInvoiceNumber,
+        originalInvoiceNumber: originalInvoiceNumber || null,
+        messageTextCandidateCount: messageTextCandidates.length,
+      }),
+    }),
+  });
+};
+
+const shouldAttemptMessageTextInvoiceRescue = ({
+  analysis = {},
+  invoiceNumber = null,
+  lookup = null,
+}) => {
+  if (invoiceNumber && lookup && lookup.found && normalizeClassification(analysis) === 'valid') {
+    return false;
+  }
+
+  return true;
+};
+
+const resolveMessageTextInvoiceRescue = async ({
+  analysis = {},
+  metadata = {},
+  invoiceNumber = null,
+  lookup = null,
+}) => {
+  if (!shouldAttemptMessageTextInvoiceRescue({ analysis, invoiceNumber, lookup })) {
+    return null;
+  }
+
+  const allCandidates = collectInvoiceCandidatesFromMessageText(metadata);
+  if (!allCandidates.length) return null;
+
+  const normalizedInvoiceNumber = normalizeInvoiceNumber(invoiceNumber);
+  const lookupCandidates = allCandidates.filter((candidate) => candidate !== normalizedInvoiceNumber);
+  if (!lookupCandidates.length) return null;
+
+  const matchedCandidates = [];
+
+  for (const candidate of lookupCandidates) {
+    const candidateLookup = await findInvoiceInConfiguredBackend(candidate, { throwOnError: true });
+    if (candidateLookup && candidateLookup.found) {
+      matchedCandidates.push({
+        invoiceNumber: candidate,
+        lookup: candidateLookup,
+      });
+    }
+  }
+
+  if (matchedCandidates.length !== 1) return null;
+
+  const rescued = matchedCandidates[0];
+
+  return {
+    rescuedInvoiceNumber: rescued.invoiceNumber,
+    lookup: rescued.lookup,
+    analysis: buildRescuedAnalysisFromMessageText(analysis, {
+      rescuedInvoiceNumber: rescued.invoiceNumber,
+      originalInvoiceNumber: normalizedInvoiceNumber || null,
+      messageTextCandidates: allCandidates,
+    }),
+    metadata: {
+      messageTextInvoiceRescued: true,
+      messageTextInvoiceNumber: rescued.invoiceNumber,
+      messageTextCandidates: allCandidates,
+      originalInvoiceNumber: normalizedInvoiceNumber || null,
+    },
+  };
 };
 
 const resolveOperationalAutoApproval = (deliveryContext = {}) => {
@@ -1283,12 +1434,16 @@ module.exports = {
 
   async syncAnalysisResult(analysis = {}, options = {}) {
     const syncMode = env.receiptBackendSyncMode;
-    const invoiceNumber = normalizeInvoiceNumber(analysis.nfExtraction && analysis.nfExtraction.nf);
+    let invoiceNumber = normalizeInvoiceNumber(analysis.nfExtraction && analysis.nfExtraction.nf);
     let lookup = null;
     let companyScope = null;
     let deliveryContext = null;
     let operationalValidation = null;
     let effectiveAnalysis = analysis;
+    let effectiveMetadata = Object.assign(
+      {},
+      options.metadata && typeof options.metadata === 'object' ? options.metadata : {},
+    );
     let promotedFromReview = false;
 
     if (invoiceNumber) {
@@ -1297,7 +1452,23 @@ module.exports = {
         : (analysis.invoiceLookup || await this.findInvoiceByNumber(invoiceNumber));
     }
 
-    if (lookup && lookup.found && normalizeClassification(analysis) === 'review') {
+    const messageTextRescue = await resolveMessageTextInvoiceRescue({
+      analysis: effectiveAnalysis,
+      metadata: effectiveMetadata,
+      invoiceNumber,
+      lookup,
+    });
+
+    if (messageTextRescue) {
+      effectiveAnalysis = messageTextRescue.analysis;
+      effectiveMetadata = Object.assign({}, effectiveMetadata, messageTextRescue.metadata);
+      lookup = messageTextRescue.lookup;
+      invoiceNumber = normalizeInvoiceNumber(
+        effectiveAnalysis.nfExtraction && effectiveAnalysis.nfExtraction.nf,
+      );
+    }
+
+    if (lookup && lookup.found && normalizeClassification(effectiveAnalysis) === 'review') {
       companyScope = await resolveCompanyScopeFromLookup(lookup);
       deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
         ? (
@@ -1319,9 +1490,9 @@ module.exports = {
 
       if (
         operationalValidation.canAutoApprove
-        && isMissingReceiptDateOnlyReview(analysis)
+        && isMissingReceiptDateOnlyReview(effectiveAnalysis)
       ) {
-        effectiveAnalysis = promoteMissingReceiptDateReview(analysis);
+        effectiveAnalysis = promoteMissingReceiptDateReview(effectiveAnalysis);
         promotedFromReview = true;
       }
     }
@@ -1368,11 +1539,11 @@ module.exports = {
       }
 
       if (!operationalValidation.canAutoApprove) {
-        const metadata = Object.assign({}, options.metadata || {}, {
-          source: options.metadata && options.metadata.source ? options.metadata.source : 'whatsapp',
-          sourceName: options.metadata && options.metadata.sourceName
-            ? options.metadata.sourceName
-            : (options.metadata && options.metadata.source ? options.metadata.source : 'whatsapp'),
+        const metadata = Object.assign({}, effectiveMetadata, {
+          source: effectiveMetadata && effectiveMetadata.source ? effectiveMetadata.source : 'whatsapp',
+          sourceName: effectiveMetadata && effectiveMetadata.sourceName
+            ? effectiveMetadata.sourceName
+            : (effectiveMetadata && effectiveMetadata.source ? effectiveMetadata.source : 'whatsapp'),
           backendAction: 'create_receipt_alert',
           backendMode: syncMode,
           classification: 'review',
@@ -1382,8 +1553,8 @@ module.exports = {
           reviewReason: operationalValidation.reviewReason,
           operationalValidationStatus: operationalValidation.status,
           reasons: Array.from(new Set([
-            ...(Array.isArray(analysis.classification && analysis.classification.reasons)
-              ? analysis.classification.reasons
+            ...(Array.isArray(effectiveAnalysis.classification && effectiveAnalysis.classification.reasons)
+              ? effectiveAnalysis.classification.reasons
               : []),
             operationalValidation.reviewReason,
           ].filter(Boolean))),
@@ -1426,7 +1597,7 @@ module.exports = {
               invoiceNumber: syncAction.invoiceNumber,
               imagePath: options.imagePath,
               companyScope,
-              metadata: options.metadata || {},
+              metadata: effectiveMetadata,
             })
         )
         : {
@@ -1447,17 +1618,17 @@ module.exports = {
         lookup,
         companyScope,
         deliveryContext,
-        sourceMessageId: options.metadata && options.metadata.messageId,
-        occurredAt: options.metadata && options.metadata.messageTimestamp,
-        groupId: options.metadata && options.metadata.groupId,
-        groupName: options.metadata && options.metadata.groupName,
-        senderPhone: options.metadata && options.metadata.senderPhone,
-        senderName: options.metadata && options.metadata.senderName,
-        senderContactName: options.metadata && options.metadata.senderContactName,
+        sourceMessageId: effectiveMetadata && effectiveMetadata.messageId,
+        occurredAt: effectiveMetadata && effectiveMetadata.messageTimestamp,
+        groupId: effectiveMetadata && effectiveMetadata.groupId,
+        groupName: effectiveMetadata && effectiveMetadata.groupName,
+        senderPhone: effectiveMetadata && effectiveMetadata.senderPhone,
+        senderName: effectiveMetadata && effectiveMetadata.senderName,
+        senderContactName: effectiveMetadata && effectiveMetadata.senderContactName,
         backendAction: 'mark_invoice_delivered',
         backendMode: syncMode,
         classification: normalizeClassification(effectiveAnalysis),
-        metadata: Object.assign({}, options.metadata || {}, {
+        metadata: Object.assign({}, effectiveMetadata, {
           backendAction: 'mark_invoice_delivered',
           backendMode: syncMode,
           tripId: deliveryContext.tripId || null,
@@ -1482,9 +1653,9 @@ module.exports = {
     }
 
     const alertPayload = buildAlertPayload({
-      analysis,
+      analysis: effectiveAnalysis,
       lookup,
-      metadata: options.metadata || {},
+      metadata: effectiveMetadata,
     });
     const alert = await this.createReceiptAlert(Object.assign({}, alertPayload, {
       invoiceNumber: syncAction.invoiceNumber,

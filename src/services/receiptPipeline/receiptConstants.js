@@ -172,6 +172,26 @@ const NF_ROI_PRIMARY_PLAN = [
     },
   },
   {
+    id: 'nf_header_anchor',
+    roiIds: ['nf_header'],
+    roiProfileId: 'label_gray_2x',
+    sourceType: 'nf_roi',
+    targetRole: 'nf_header_anchor',
+    parameters: {
+      tessedit_pageseg_mode: '7',
+    },
+  },
+  {
+    id: 'nf_series_anchor',
+    roiIds: ['nf_series_line'],
+    roiProfileId: 'label_gray_2x',
+    sourceType: 'nf_roi',
+    targetRole: 'nf_series_anchor',
+    parameters: {
+      tessedit_pageseg_mode: '7',
+    },
+  },
+  {
     id: 'nf_number_line',
     roiIds: ['nf_number_line', 'nf_number_tight'],
     roiProfileId: 'nf_digits_line_3x',

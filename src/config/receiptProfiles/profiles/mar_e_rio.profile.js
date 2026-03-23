@@ -208,6 +208,15 @@ module.exports = {
       fallbackRoiId: 'nf_block',
     },
     {
+      id: 'nf_series_line',
+      label: 'Linha da serie do bloco NF-e',
+      box: { x: 0.855, y: 0.47, width: 0.13, height: 0.2 },
+      phase: 'primary',
+      minWidth: 110,
+      minHeight: 30,
+      fallbackRoiId: 'nf_block',
+    },
+    {
       id: 'nf_block_wide',
       label: 'Bloco NF-e expandido',
       box: { x: 0.8, y: 0.0, width: 0.2, height: 0.98 },

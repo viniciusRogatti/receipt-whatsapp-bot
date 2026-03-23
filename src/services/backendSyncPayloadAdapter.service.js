@@ -65,6 +65,9 @@ const buildMetadataFromCanonicalRequest = (request = {}) => {
     senderName: metadata.senderName || null,
     senderContactName: metadata.senderContactName || null,
     messageTimestamp: metadata.messageTimestamp || null,
+    messageText: metadata.messageText || metadata.caption || metadata.body || null,
+    caption: metadata.caption || metadata.messageText || metadata.body || null,
+    body: metadata.body || metadata.caption || metadata.messageText || null,
   });
 };
 

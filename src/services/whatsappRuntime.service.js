@@ -29,6 +29,8 @@ const sanitizeSegment = (value, fallback = 'group') => {
   return normalized || fallback;
 };
 
+const normalizeMessageText = (value) => String(value || '').trim();
+
 const buildPuppeteerOptions = () => {
   const args = env.whatsappBrowserArgs.length
     ? env.whatsappBrowserArgs.slice()
@@ -93,6 +95,12 @@ const listAvailableGroups = async (client) => {
 
 const buildMessageContext = async (message, chat) => {
   const timestamp = Number(message.timestamp || 0);
+  const messageText = normalizeMessageText(
+    message.body
+    || message.caption
+    || (message._data && (message._data.caption || message._data.body))
+    || '',
+  );
   let contact = null;
 
   if (typeof message.getContact === 'function') {
@@ -135,6 +143,9 @@ const buildMessageContext = async (message, chat) => {
     senderName,
     senderContactName,
     timestamp: timestamp > 0 ? timestamp * 1000 : null,
+    messageText: messageText || null,
+    caption: messageText || null,
+    body: messageText || null,
   };
 };
 

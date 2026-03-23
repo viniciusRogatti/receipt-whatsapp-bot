@@ -18,6 +18,37 @@ const resolveSourceLabel = (metadata = {}) => {
   return groupName ? `${sourceName}:${groupName}` : sourceName;
 };
 
+const buildWhatsappAlertMetadata = ({
+  metadata = {},
+  reasons = [],
+  classification = null,
+}) => ({
+  source: metadata.source || 'whatsapp',
+  sourceName: metadata.sourceName || metadata.source || 'whatsapp',
+  groupId: metadata.groupId || null,
+  groupName: metadata.groupName || null,
+  chatId: metadata.chatId || null,
+  messageId: metadata.messageId || null,
+  mediaId: metadata.mediaId || null,
+  sender: metadata.sender || null,
+  senderId: metadata.senderId || null,
+  senderPhone: metadata.senderPhone || null,
+  senderName: metadata.senderName || null,
+  senderContactName: metadata.senderContactName || null,
+  messageTimestamp: metadata.messageTimestamp || null,
+  messageText: metadata.messageText || metadata.caption || metadata.body || null,
+  caption: metadata.caption || metadata.messageText || metadata.body || null,
+  body: metadata.body || metadata.caption || metadata.messageText || null,
+  messageTextInvoiceRescued: !!metadata.messageTextInvoiceRescued,
+  messageTextInvoiceNumber: metadata.messageTextInvoiceNumber || null,
+  messageTextCandidates: Array.isArray(metadata.messageTextCandidates)
+    ? metadata.messageTextCandidates.slice()
+    : [],
+  originalInvoiceNumber: metadata.originalInvoiceNumber || null,
+  reasons,
+  classification,
+});
+
 const buildAlertPayload = ({ analysis = {}, lookup = null, metadata = {} }) => {
   const invoiceNumber = normalizeInvoiceNumber(analysis.nfExtraction && analysis.nfExtraction.nf);
   const classification = normalizeClassification(analysis);
@@ -32,23 +63,11 @@ const buildAlertPayload = ({ analysis = {}, lookup = null, metadata = {} }) => {
       title: 'Canhoto do WhatsApp sem NF identificada',
       message: `O bot recebeu uma imagem em ${sourceLabel}, mas nao conseguiu identificar a NF.`,
       severity: 'WARNING',
-      metadata: {
-        source: metadata.source || 'whatsapp',
-        sourceName: metadata.sourceName || metadata.source || 'whatsapp',
-        groupId: metadata.groupId || null,
-        groupName: metadata.groupName || null,
-        chatId: metadata.chatId || null,
-        messageId: metadata.messageId || null,
-        mediaId: metadata.mediaId || null,
-        sender: metadata.sender || null,
-        senderId: metadata.senderId || null,
-        senderPhone: metadata.senderPhone || null,
-        senderName: metadata.senderName || null,
-        senderContactName: metadata.senderContactName || null,
-        messageTimestamp: metadata.messageTimestamp || null,
+      metadata: buildWhatsappAlertMetadata({
+        metadata,
         reasons,
         classification,
-      },
+      }),
     };
   }
 
@@ -58,23 +77,11 @@ const buildAlertPayload = ({ analysis = {}, lookup = null, metadata = {} }) => {
       title: 'NF lida no WhatsApp nao foi encontrada no sistema',
       message: `A NF ${invoiceNumber} foi lida em ${sourceLabel}, mas nao existe na base operacional da empresa.`,
       severity: 'CRITICAL',
-      metadata: {
-        source: metadata.source || 'whatsapp',
-        sourceName: metadata.sourceName || metadata.source || 'whatsapp',
-        groupId: metadata.groupId || null,
-        groupName: metadata.groupName || null,
-        chatId: metadata.chatId || null,
-        messageId: metadata.messageId || null,
-        mediaId: metadata.mediaId || null,
-        sender: metadata.sender || null,
-        senderId: metadata.senderId || null,
-        senderPhone: metadata.senderPhone || null,
-        senderName: metadata.senderName || null,
-        senderContactName: metadata.senderContactName || null,
-        messageTimestamp: metadata.messageTimestamp || null,
+      metadata: buildWhatsappAlertMetadata({
+        metadata,
         reasons,
         classification,
-      },
+      }),
     };
   }
 
@@ -84,23 +91,11 @@ const buildAlertPayload = ({ analysis = {}, lookup = null, metadata = {} }) => {
       title: `Canhoto da NF ${invoiceNumber} exige revisao manual`,
       message: `O bot leu a NF ${invoiceNumber} em ${sourceLabel}, mas a imagem ainda exige revisao manual.`,
       severity: 'WARNING',
-      metadata: {
-        source: metadata.source || 'whatsapp',
-        sourceName: metadata.sourceName || metadata.source || 'whatsapp',
-        groupId: metadata.groupId || null,
-        groupName: metadata.groupName || null,
-        chatId: metadata.chatId || null,
-        messageId: metadata.messageId || null,
-        mediaId: metadata.mediaId || null,
-        sender: metadata.sender || null,
-        senderId: metadata.senderId || null,
-        senderPhone: metadata.senderPhone || null,
-        senderName: metadata.senderName || null,
-        senderContactName: metadata.senderContactName || null,
-        messageTimestamp: metadata.messageTimestamp || null,
+      metadata: buildWhatsappAlertMetadata({
+        metadata,
         reasons,
         classification,
-      },
+      }),
     };
   }
 
@@ -109,23 +104,11 @@ const buildAlertPayload = ({ analysis = {}, lookup = null, metadata = {} }) => {
     title: `Canhoto invalido para a NF ${invoiceNumber || 'desconhecida'}`,
     message: `O bot recebeu uma imagem em ${sourceLabel}, mas nao conseguiu validar o canhoto com seguranca.`,
     severity: 'WARNING',
-    metadata: {
-      source: metadata.source || 'whatsapp',
-      sourceName: metadata.sourceName || metadata.source || 'whatsapp',
-      groupId: metadata.groupId || null,
-      groupName: metadata.groupName || null,
-      chatId: metadata.chatId || null,
-      messageId: metadata.messageId || null,
-      mediaId: metadata.mediaId || null,
-      sender: metadata.sender || null,
-      senderId: metadata.senderId || null,
-      senderPhone: metadata.senderPhone || null,
-      senderName: metadata.senderName || null,
-      senderContactName: metadata.senderContactName || null,
-      messageTimestamp: metadata.messageTimestamp || null,
+    metadata: buildWhatsappAlertMetadata({
+      metadata,
       reasons,
       classification,
-    },
+    }),
   };
 };
 

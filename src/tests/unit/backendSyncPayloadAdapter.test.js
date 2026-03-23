@@ -54,6 +54,9 @@ module.exports = () => {
             messageId: 'abc',
             senderPhone: '5511999999999',
             sourceName: 'whatsapp',
+            messageText: 'NF 1721192',
+            caption: 'NF 1721192',
+            body: 'NF 1721192',
           },
         });
 
@@ -63,6 +66,9 @@ module.exports = () => {
         assert.strictEqual(metadata.groupName, 'KP  - CANHOTOS');
         assert.strictEqual(metadata.messageId, 'abc');
         assert.strictEqual(metadata.senderPhone, '5511999999999');
+        assert.strictEqual(metadata.messageText, 'NF 1721192');
+        assert.strictEqual(metadata.caption, 'NF 1721192');
+        assert.strictEqual(metadata.body, 'NF 1721192');
       },
     },
   ];
