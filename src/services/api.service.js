@@ -517,7 +517,7 @@ const isMissingReceiptDateOnlyReview = (analysis = {}) => {
   return foundMissingReceiptDateReason;
 };
 
-const promoteMissingReceiptDateReview = (analysis = {}) => {
+const promoteReviewToValid = (analysis = {}, promotionReason = 'route_assignment') => {
   const currentClassification = analysis.classification && typeof analysis.classification === 'object'
     ? analysis.classification
     : {};
@@ -530,7 +530,7 @@ const promoteMissingReceiptDateReview = (analysis = {}) => {
       classification: 'valid',
       metrics: Object.assign({}, currentMetrics, {
         promotedByOperationalContext: true,
-        promotionReason: 'missing_receipt_date_only',
+        promotionReason,
         originalClassification: normalizeClassification(analysis),
       }),
     }),
@@ -691,11 +691,12 @@ const resolveOperationalAutoApproval = (deliveryContext = {}) => {
   const tripId = Number(deliveryContext.tripId || 0) || null;
   const tripNoteId = Number(deliveryContext.tripNoteId || 0) || null;
   const driverId = Number(deliveryContext.driverId || 0) || null;
+  const hasRouteAssignment = !!(tripId || tripNoteId);
 
-  if (!tripNoteId) {
+  if (!hasRouteAssignment) {
     return {
       canAutoApprove: false,
-      status: 'missing_trip_note_assignment',
+      status: 'missing_route_assignment',
       tripId,
       tripNoteId: null,
       driverId,
@@ -703,20 +704,9 @@ const resolveOperationalAutoApproval = (deliveryContext = {}) => {
     };
   }
 
-  if (!driverId) {
-    return {
-      canAutoApprove: false,
-      status: 'missing_driver_assignment',
-      tripId,
-      tripNoteId,
-      driverId: null,
-      reviewReason: 'A NF foi identificada, mas ainda nao possui motorista atribuido para validacao automatica.',
-    };
-  }
-
   return {
     canAutoApprove: true,
-    status: 'matched_driver_assignment',
+    status: 'matched_route_assignment',
     tripId,
     tripNoteId,
     driverId,
@@ -1445,6 +1435,7 @@ module.exports = {
       options.metadata && typeof options.metadata === 'object' ? options.metadata : {},
     );
     let promotedFromReview = false;
+    let promotionReason = null;
 
     if (invoiceNumber) {
       lookup = isRealBackendSyncEnabled()
@@ -1492,7 +1483,8 @@ module.exports = {
         operationalValidation.canAutoApprove
         && isMissingReceiptDateOnlyReview(effectiveAnalysis)
       ) {
-        effectiveAnalysis = promoteMissingReceiptDateReview(effectiveAnalysis);
+        promotionReason = 'missing_receipt_date_only';
+        effectiveAnalysis = promoteReviewToValid(effectiveAnalysis, promotionReason);
         promotedFromReview = true;
       }
     }
@@ -1628,17 +1620,17 @@ module.exports = {
         backendAction: 'mark_invoice_delivered',
         backendMode: syncMode,
         classification: normalizeClassification(effectiveAnalysis),
-        metadata: Object.assign({}, effectiveMetadata, {
-          backendAction: 'mark_invoice_delivered',
-          backendMode: syncMode,
-          tripId: deliveryContext.tripId || null,
-          tripNoteId: deliveryContext.tripNoteId || null,
-          driverId: deliveryContext.driverId || null,
-          operationalValidationStatus: operationalValidation.status,
-          promotedFromReview,
-          promotionReason: promotedFromReview ? 'missing_receipt_date_only' : null,
-          originalClassification: promotedFromReview ? normalizeClassification(analysis) : null,
-        }),
+          metadata: Object.assign({}, effectiveMetadata, {
+            backendAction: 'mark_invoice_delivered',
+            backendMode: syncMode,
+            tripId: deliveryContext.tripId || null,
+            tripNoteId: deliveryContext.tripNoteId || null,
+            driverId: deliveryContext.driverId || null,
+            operationalValidationStatus: operationalValidation.status,
+            promotedFromReview,
+            promotionReason,
+            originalClassification: promotedFromReview ? normalizeClassification(analysis) : null,
+          }),
       });
 
       return {
