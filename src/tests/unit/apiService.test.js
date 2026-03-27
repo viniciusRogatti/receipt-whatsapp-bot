@@ -254,6 +254,71 @@ module.exports = () => {
       },
     },
     {
+      name: 'apiService em backend_api ignora numero fora do padrao operacional de NF',
+      run: async () => {
+        const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
+        const originalBackendApiToken = env.receiptBackendApiToken;
+        const originalBackendSyncMode = env.receiptBackendSyncMode;
+        const originalBackendRoot = env.backendRoot;
+        const originalCompanyCode = env.receiptInvoiceLookupCompanyCode;
+        const originalCompanyId = env.receiptInvoiceLookupCompanyId;
+        const originalFetch = global.fetch;
+        const requests = [];
+
+        env.receiptBackendApiBaseUrl = 'https://backend.example';
+        env.receiptBackendApiToken = 'token-de-teste';
+        env.receiptBackendSyncMode = 'status_only';
+        env.backendRoot = '/backend-inexistente-para-teste';
+        env.receiptInvoiceLookupCompanyCode = 'mar_e_rio';
+        env.receiptInvoiceLookupCompanyId = null;
+
+        global.fetch = async (url, options = {}) => {
+          requests.push({ url, options });
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/12345')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                found: false,
+                reason: 'invoice_not_found',
+              }),
+            };
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        };
+
+        try {
+          const result = await apiService.syncAnalysisResult({
+            nfExtraction: { nf: '12345' },
+            classification: { classification: 'review', reasons: ['Leitura parcial.'] },
+          }, {
+            metadata: {
+              source: 'whatsapp',
+              groupName: 'Grupo de Canhotos',
+              messageId: 'wamid-sample-1',
+            },
+          });
+
+          assert.strictEqual(result.action, 'none');
+          assert.strictEqual(result.reason, 'ignored_non_operational_invoice');
+          assert.strictEqual(result.ignored, true);
+          assert.strictEqual(requests.length, 1);
+          assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/12345');
+        } finally {
+          env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
+          env.receiptBackendApiToken = originalBackendApiToken;
+          env.receiptBackendSyncMode = originalBackendSyncMode;
+          env.backendRoot = originalBackendRoot;
+          env.receiptInvoiceLookupCompanyCode = originalCompanyCode;
+          env.receiptInvoiceLookupCompanyId = originalCompanyId;
+          global.fetch = originalFetch;
+          await apiService.shutdown().catch(() => undefined);
+        }
+      },
+    },
+    {
       name: 'apiService em backend_api aprova NF valida quando a rota existe mesmo sem motorista',
       run: async () => {
         const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
@@ -481,7 +546,7 @@ module.exports = () => {
       },
     },
     {
-      name: 'apiService em backend_api recupera a NF pela legenda da mensagem e mantem revisao na NF correta quando a imagem ainda exige validacao manual',
+      name: 'apiService em backend_api recupera a NF pela legenda da mensagem e promove para sucesso quando a NF ja esta vinculada a rota',
       run: async () => {
         const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
         const originalBackendApiToken = env.receiptBackendApiToken;
@@ -535,15 +600,23 @@ module.exports = () => {
             };
           }
 
-          if (url.endsWith('/api/receipt-bot/alerts')) {
+          if (url.endsWith('/api/receipt-bot/danfes/status')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                updated: true,
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/whatsapp-success-activity')) {
             return {
               ok: true,
               status: 201,
               text: async () => JSON.stringify({
                 created: true,
-                alert: {
-                  id: 990,
-                },
+                eventId: 990,
               }),
             };
           }
@@ -592,22 +665,33 @@ module.exports = () => {
             },
           });
 
-          assert.strictEqual(result.action, 'create_receipt_alert');
-          assert.strictEqual(result.reason, 'manual_review_required');
-          assert.strictEqual(requests.length, 3);
+          assert.strictEqual(result.action, 'mark_invoice_delivered');
+          assert.strictEqual(result.promotedFromReview, true);
+          assert.strictEqual(requests.length, 4);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/2010316');
           assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721192');
-          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/alerts');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/danfes/status');
+          assert.strictEqual(requests[3].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
 
-          const alertBody = JSON.parse(requests[2].options.body);
-          assert.strictEqual(alertBody.invoiceNumber, '1721192');
-          assert.strictEqual(alertBody.code, 'RECEIPT_MANUAL_REVIEW_REQUIRED');
-          assert.strictEqual(alertBody.metadata.messageTextInvoiceRescued, true);
-          assert.strictEqual(alertBody.metadata.messageTextInvoiceNumber, '1721192');
-          assert.strictEqual(alertBody.metadata.originalInvoiceNumber, '2010316');
-          assert.strictEqual(alertBody.metadata.messageText, 'NF 1721192');
-          assert.strictEqual(alertBody.metadata.caption, 'NF 1721192');
-          assert.strictEqual(alertBody.metadata.body, 'NF 1721192');
+          const statusBody = JSON.parse(requests[2].options.body);
+          assert.strictEqual(statusBody.invoiceNumber, '1721192');
+          assert.strictEqual(statusBody.status, 'delivered');
+
+          const activityBody = JSON.parse(requests[3].options.body);
+          assert.strictEqual(activityBody.invoiceNumber, '1721192');
+          assert.strictEqual(activityBody.classification, 'valid');
+          assert.strictEqual(activityBody.tripId, 60);
+          assert.strictEqual(activityBody.tripNoteId, 850);
+          assert.strictEqual(activityBody.driverId, 5);
+          assert.strictEqual(activityBody.metadata.promotedFromReview, true);
+          assert.strictEqual(activityBody.metadata.promotionReason, 'matched_route_assignment');
+          assert.strictEqual(activityBody.metadata.originalClassification, 'review');
+          assert.strictEqual(activityBody.metadata.messageTextInvoiceRescued, true);
+          assert.strictEqual(activityBody.metadata.messageTextInvoiceNumber, '1721192');
+          assert.strictEqual(activityBody.metadata.originalInvoiceNumber, '2010316');
+          assert.strictEqual(activityBody.metadata.messageText, 'NF 1721192');
+          assert.strictEqual(activityBody.metadata.caption, 'NF 1721192');
+          assert.strictEqual(activityBody.metadata.body, 'NF 1721192');
 
         } finally {
           env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;

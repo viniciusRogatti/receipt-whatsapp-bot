@@ -517,6 +517,26 @@ const isMissingReceiptDateOnlyReview = (analysis = {}) => {
   return foundMissingReceiptDateReason;
 };
 
+const shouldPromoteReviewWithOperationalMatch = ({
+  analysis = {},
+  lookup = null,
+  operationalValidation = null,
+  invoiceNumber = null,
+} = {}) => {
+  if (normalizeClassification(analysis) !== 'review') return false;
+  if (!lookup || lookup.found !== true) return false;
+  if (!operationalValidation || operationalValidation.canAutoApprove !== true) return false;
+  return isOperationalInvoiceNumber(invoiceNumber);
+};
+
+const resolveOperationalPromotionReason = (analysis = {}) => {
+  if (isMissingReceiptDateOnlyReview(analysis)) {
+    return 'missing_receipt_date_only';
+  }
+
+  return 'matched_route_assignment';
+};
+
 const promoteReviewToValid = (analysis = {}, promotionReason = 'route_assignment') => {
   const currentClassification = analysis.classification && typeof analysis.classification === 'object'
     ? analysis.classification
@@ -548,6 +568,12 @@ const resolveExpectedInvoiceLengths = () => {
   return parsed.length
     ? Array.from(new Set(parsed)).sort((left, right) => left - right)
     : [7];
+};
+
+const isOperationalInvoiceNumber = (invoiceNumber) => {
+  const normalizedInvoiceNumber = normalizeInvoiceNumber(invoiceNumber);
+  if (!normalizedInvoiceNumber) return false;
+  return resolveExpectedInvoiceLengths().includes(normalizedInvoiceNumber.length);
 };
 
 const collectInvoiceCandidatesFromMessageText = (metadata = {}) => {
@@ -1459,6 +1485,17 @@ module.exports = {
       );
     }
 
+    if (invoiceNumber && !isOperationalInvoiceNumber(invoiceNumber)) {
+      return {
+        mode: syncMode,
+        action: 'none',
+        reason: 'ignored_non_operational_invoice',
+        lookup,
+        ignored: true,
+        invoiceNumber,
+      };
+    }
+
     if (lookup && lookup.found && normalizeClassification(effectiveAnalysis) === 'review') {
       companyScope = await resolveCompanyScopeFromLookup(lookup);
       deliveryContext = companyScope && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
@@ -1479,11 +1516,13 @@ module.exports = {
           reviewReason: '',
         };
 
-      if (
-        operationalValidation.canAutoApprove
-        && isMissingReceiptDateOnlyReview(effectiveAnalysis)
-      ) {
-        promotionReason = 'missing_receipt_date_only';
+      if (shouldPromoteReviewWithOperationalMatch({
+        analysis: effectiveAnalysis,
+        lookup,
+        operationalValidation,
+        invoiceNumber,
+      })) {
+        promotionReason = resolveOperationalPromotionReason(effectiveAnalysis);
         effectiveAnalysis = promoteReviewToValid(effectiveAnalysis, promotionReason);
         promotedFromReview = true;
       }
