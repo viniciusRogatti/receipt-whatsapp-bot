@@ -705,5 +705,157 @@ module.exports = () => {
         }
       },
     },
+    {
+      name: 'apiService em backend_api aprova pela legenda quando a imagem ja trouxe os demais campos obrigatorios',
+      run: async () => {
+        const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
+        const originalBackendApiToken = env.receiptBackendApiToken;
+        const originalBackendSyncMode = env.receiptBackendSyncMode;
+        const originalBackendRoot = env.backendRoot;
+        const originalCompanyCode = env.receiptInvoiceLookupCompanyCode;
+        const originalCompanyId = env.receiptInvoiceLookupCompanyId;
+        const originalFetch = global.fetch;
+        const requests = [];
+
+        env.receiptBackendApiBaseUrl = 'https://backend.example';
+        env.receiptBackendApiToken = 'token-de-teste';
+        env.receiptBackendSyncMode = 'status_only';
+        env.backendRoot = '/backend-inexistente-para-teste';
+        env.receiptInvoiceLookupCompanyCode = 'mar_e_rio';
+        env.receiptInvoiceLookupCompanyId = null;
+
+        global.fetch = async (url, options = {}) => {
+          requests.push({ url, options });
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/1721192')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                found: true,
+                invoice: {
+                  invoiceNumber: '1721192',
+                },
+                company: {
+                  id: 1,
+                  code: 'mar_e_rio',
+                },
+                deliveryContext: {
+                  tripId: 60,
+                  tripNoteId: 850,
+                  driverId: 5,
+                },
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/danfes/status')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                updated: true,
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/whatsapp-success-activity')) {
+            return {
+              ok: true,
+              status: 201,
+              text: async () => JSON.stringify({
+                created: true,
+                eventId: 991,
+              }),
+            };
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        };
+
+        try {
+          const result = await apiService.syncProcessingResult({
+            extraction: {
+              providerId: 'google_vision_document_text',
+              parsedDocument: {
+                fields: {
+                  invoiceNumber: {
+                    value: null,
+                    found: false,
+                    confidence: 0,
+                  },
+                  receiptDate: {
+                    value: '20/03/2026',
+                    found: true,
+                    confidence: 0.94,
+                  },
+                  issuerHeader: {
+                    value: 'MAR E RIO',
+                    found: true,
+                    confidence: 0.93,
+                  },
+                },
+                summary: {
+                  averageConfidence: 0.9,
+                  foundFieldCount: 2,
+                  missingFieldKeys: ['invoiceNumber'],
+                },
+                fullText: 'DATA DE RECEBIMENTO 20/03/2026',
+              },
+            },
+            decision: {
+              classification: 'review',
+              reasons: ['Campo obrigatorio ausente: NF-e.'],
+              metrics: {
+                averageConfidence: 0.9,
+              },
+            },
+            request: {
+              companyId: 1,
+              source: 'whatsapp',
+              documentType: 'delivery_receipt',
+              metadata: {
+                groupId: '5511947926056-1605791350@g.us',
+                groupName: 'KP  - CANHOTOS',
+                messageId: 'wamid-caption-rescue-2',
+                senderName: 'KP Campinas 2',
+                messageText: 'NF 1721192',
+                caption: 'NF 1721192',
+                body: 'NF 1721192',
+              },
+            },
+          });
+
+          assert.strictEqual(result.action, 'mark_invoice_delivered');
+          assert.strictEqual(result.promotedFromReview, false);
+          assert.strictEqual(requests.length, 3);
+          assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721192');
+          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/status');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+
+          const statusBody = JSON.parse(requests[1].options.body);
+          assert.strictEqual(statusBody.invoiceNumber, '1721192');
+          assert.strictEqual(statusBody.status, 'delivered');
+
+          const activityBody = JSON.parse(requests[2].options.body);
+          assert.strictEqual(activityBody.invoiceNumber, '1721192');
+          assert.strictEqual(activityBody.classification, 'valid');
+          assert.strictEqual(activityBody.metadata.promotedFromReview, false);
+          assert.strictEqual(activityBody.metadata.originalClassification, null);
+          assert.strictEqual(activityBody.metadata.messageTextInvoiceRescued, true);
+          assert.strictEqual(activityBody.metadata.messageTextInvoiceNumber, '1721192');
+          assert.strictEqual(activityBody.metadata.messageText, 'NF 1721192');
+        } finally {
+          env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
+          env.receiptBackendApiToken = originalBackendApiToken;
+          env.receiptBackendSyncMode = originalBackendSyncMode;
+          env.backendRoot = originalBackendRoot;
+          env.receiptInvoiceLookupCompanyCode = originalCompanyCode;
+          env.receiptInvoiceLookupCompanyId = originalCompanyId;
+          global.fetch = originalFetch;
+          await apiService.shutdown().catch(() => undefined);
+        }
+      },
+    },
   ];
 };

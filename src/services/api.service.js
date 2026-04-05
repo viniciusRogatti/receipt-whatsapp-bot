@@ -4,6 +4,7 @@ const { createRequire } = require('module');
 const dotenv = require('dotenv');
 const sharp = require('sharp');
 const env = require('../config/env');
+const { EXTRACTION_FIELD_KEYS } = require('../config/profiles');
 const {
   buildAlertPayload,
   guessMimeTypeFromPath,
@@ -43,6 +44,10 @@ const IGNORABLE_REVIEW_REASONS_FOR_AUTO_PROMOTION = new Set([
   'a nf foi localizada, mas ainda ha ambiguidade residual na leitura estrutural da imagem.',
 ]);
 const MESSAGE_TEXT_METADATA_KEYS = ['messageText', 'caption', 'body'];
+const MESSAGE_TEXT_RESCUE_REQUIRED_IMAGE_FIELDS = [
+  EXTRACTION_FIELD_KEYS.receiptDate,
+  EXTRACTION_FIELD_KEYS.issuerHeader,
+];
 
 const toDateOnly = (value) => {
   if (!value && value !== 0) return null;
@@ -604,6 +609,42 @@ const buildMessageTextInvoiceRescueReason = ({
     : `NF ${rescuedInvoiceNumber} recuperada pela legenda da mensagem.`
 );
 
+const getDocumentFieldSnapshot = (analysis = {}, fieldKey) => {
+  const documentFields = analysis.documentFields && typeof analysis.documentFields === 'object'
+    ? analysis.documentFields
+    : {};
+  const field = documentFields[fieldKey];
+
+  return field && typeof field === 'object'
+    ? field
+    : {};
+};
+
+const shouldAutoApproveMessageTextRescue = (analysis = {}) => {
+  const currentClassification = normalizeClassification(analysis);
+  if (currentClassification === 'valid') return true;
+
+  const documentSummary = analysis.documentSummary && typeof analysis.documentSummary === 'object'
+    ? analysis.documentSummary
+    : {};
+  const missingFieldKeys = Array.isArray(documentSummary.missingFieldKeys)
+    ? documentSummary.missingFieldKeys.filter(Boolean)
+    : [];
+  const averageConfidence = Number(
+    documentSummary.averageConfidence
+    || analysis.classification && analysis.classification.metrics && analysis.classification.metrics.averageConfidence
+    || 0,
+  );
+  const hasAllRequiredImageFields = MESSAGE_TEXT_RESCUE_REQUIRED_IMAGE_FIELDS.every((fieldKey) => {
+    const field = getDocumentFieldSnapshot(analysis, fieldKey);
+    return !!field.found;
+  });
+  const onlyInvoiceMissing = !missingFieldKeys.length
+    || missingFieldKeys.every((fieldKey) => fieldKey === EXTRACTION_FIELD_KEYS.invoiceNumber);
+
+  return hasAllRequiredImageFields && onlyInvoiceMissing && averageConfidence >= 0.82;
+};
+
 const buildRescuedAnalysisFromMessageText = (analysis = {}, {
   rescuedInvoiceNumber,
   originalInvoiceNumber = null,
@@ -621,6 +662,7 @@ const buildRescuedAnalysisFromMessageText = (analysis = {}, {
   const currentReasons = Array.isArray(currentClassification.reasons)
     ? currentClassification.reasons.filter(Boolean)
     : [];
+  const autoApproved = shouldAutoApproveMessageTextRescue(analysis);
   const rescueReason = buildMessageTextInvoiceRescueReason({
     rescuedInvoiceNumber,
     originalInvoiceNumber,
@@ -636,16 +678,18 @@ const buildRescuedAnalysisFromMessageText = (analysis = {}, {
       originalNf: originalInvoiceNumber || normalizeInvoiceNumber(currentExtraction.nf) || null,
     }),
     classification: Object.assign({}, currentClassification, {
-      classification: 'review',
+      classification: autoApproved ? 'valid' : 'review',
       reasons: Array.from(new Set([
         ...currentReasons,
         rescueReason,
+        autoApproved ? 'NF recuperada pela legenda da mensagem com os demais campos validados na imagem.' : null,
       ])),
       metrics: Object.assign({}, currentMetrics, {
         messageTextInvoiceRescued: true,
         messageTextInvoiceNumber: rescuedInvoiceNumber,
         originalInvoiceNumber: originalInvoiceNumber || null,
         messageTextCandidateCount: messageTextCandidates.length,
+        messageTextAutoApproved: autoApproved,
       }),
     }),
   });

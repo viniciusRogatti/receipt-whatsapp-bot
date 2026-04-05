@@ -19,9 +19,21 @@ module.exports = () => {
                   found: true,
                   confidence: 0.91,
                 },
+                receiptDate: {
+                  value: '20/03/2026',
+                  found: true,
+                  confidence: 0.88,
+                },
+                issuerHeader: {
+                  value: 'MAR E RIO',
+                  found: true,
+                  confidence: 0.9,
+                },
               },
               summary: {
                 averageConfidence: 0.84,
+                foundFieldCount: 3,
+                missingFieldKeys: [],
               },
               fullText: 'NF-e 1710486',
             },
@@ -39,6 +51,10 @@ module.exports = () => {
         assert.strictEqual(analysis.nfExtraction.confidence, 0.91);
         assert.strictEqual(analysis.classification.classification, 'valid');
         assert.deepStrictEqual(analysis.classification.reasons, ['Tudo certo']);
+        assert.strictEqual(analysis.documentFields.receiptDate.found, true);
+        assert.strictEqual(analysis.documentFields.issuerHeader.found, true);
+        assert.strictEqual(analysis.documentSummary.foundFieldCount, 3);
+        assert.deepStrictEqual(analysis.documentSummary.missingFieldKeys, []);
       },
     },
     {

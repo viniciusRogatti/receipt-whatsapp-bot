@@ -10,6 +10,12 @@ const toPlainObject = (value) => (
 );
 
 const cloneArray = (value) => Array.isArray(value) ? value.slice() : [];
+const toFieldSnapshot = (field = {}) => ({
+  value: field.value || null,
+  found: !!field.found,
+  confidence: Number(field.confidence || 0) || 0,
+  source: field.source || null,
+});
 
 const buildAnalysisFromProcessingResult = (processingResult = {}) => {
   const parsedDocument = processingResult.extraction && processingResult.extraction.parsedDocument
@@ -40,6 +46,22 @@ const buildAnalysisFromProcessingResult = (processingResult = {}) => {
       metrics: decision.metrics && typeof decision.metrics === 'object'
         ? decision.metrics
         : {},
+    },
+    documentFields: {
+      [EXTRACTION_FIELD_KEYS.invoiceNumber]: toFieldSnapshot(fields[EXTRACTION_FIELD_KEYS.invoiceNumber]),
+      [EXTRACTION_FIELD_KEYS.receiptDate]: toFieldSnapshot(fields[EXTRACTION_FIELD_KEYS.receiptDate]),
+      [EXTRACTION_FIELD_KEYS.issuerHeader]: toFieldSnapshot(fields[EXTRACTION_FIELD_KEYS.issuerHeader]),
+    },
+    documentSummary: {
+      foundFieldCount: Number(
+        parsedDocument.summary && parsedDocument.summary.foundFieldCount,
+      ) || 0,
+      missingFieldKeys: cloneArray(
+        parsedDocument.summary && parsedDocument.summary.missingFieldKeys,
+      ).filter(Boolean),
+      averageConfidence: Number(
+        parsedDocument.summary && parsedDocument.summary.averageConfidence,
+      ) || 0,
     },
   };
 };
