@@ -5,6 +5,10 @@ const {
 
 const clamp01 = (value) => Math.max(0, Math.min(1, Number(value || 0)));
 
+const hasConfidentField = (field = {}, threshold = 0.78) => (
+  !!field.found && clamp01(field.confidence) >= Number(threshold || 0.78)
+);
+
 const buildMissingFieldReasons = (fields = {}, documentProfile) => {
   const fieldDefinitions = documentProfile.fieldDefinitions || {};
 
@@ -47,6 +51,38 @@ const shouldTriggerFallback = ({
   );
 };
 
+const shouldSoftApproveWithSingleMissingField = ({
+  fields = {},
+  missingFieldKeys = [],
+  averageConfidence = 0,
+  validation = {},
+}) => {
+  if (!validation.allowApproveWithSingleNonInvoiceFieldMissing) return false;
+  if (missingFieldKeys.length !== 1) return false;
+
+  const [missingFieldKey] = missingFieldKeys;
+  if (missingFieldKey === EXTRACTION_FIELD_KEYS.invoiceNumber) return false;
+
+  const minimumAverageConfidence = Number(
+    validation.singleMissingFieldAverageConfidenceThreshold || 0.74,
+  );
+  if (averageConfidence < minimumAverageConfidence) return false;
+
+  const minimumFieldConfidence = Number(
+    validation.singleMissingFieldConfidenceThreshold || 0.78,
+  );
+
+  return hasConfidentField(fields[EXTRACTION_FIELD_KEYS.invoiceNumber], minimumFieldConfidence)
+    && hasConfidentField(
+      fields[
+        missingFieldKey === EXTRACTION_FIELD_KEYS.receiptDate
+          ? EXTRACTION_FIELD_KEYS.issuerHeader
+          : EXTRACTION_FIELD_KEYS.receiptDate
+      ],
+      minimumFieldConfidence,
+    );
+};
+
 module.exports = {
   buildOperationalDecision({
     parsedDocument,
@@ -65,12 +101,26 @@ module.exports = {
     const averageConfidence = clamp01(parsedDocument.summary.averageConfidence || 0);
     const missingRequiredCount = missingFieldReasons.length;
     const headerMissing = !(fields[EXTRACTION_FIELD_KEYS.issuerHeader] && fields[EXTRACTION_FIELD_KEYS.issuerHeader].found);
+    const missingFieldKeys = parsedDocument.summary && Array.isArray(parsedDocument.summary.missingFieldKeys)
+      ? parsedDocument.summary.missingFieldKeys.filter(Boolean)
+      : [];
+    const softApprovedWithSingleMissingField = shouldSoftApproveWithSingleMissingField({
+      fields,
+      missingFieldKeys,
+      averageConfidence,
+      validation,
+    });
 
     let classification = 'review';
     if (
-      missingRequiredCount === 0
-      && averageConfidence >= Number(validation.validConfidenceThreshold || 0.82)
-      && (!headerMissing || validation.allowApproveWithoutHeader)
+      (
+        (
+          missingRequiredCount === 0
+          && averageConfidence >= Number(validation.validConfidenceThreshold || 0.82)
+          && (!headerMissing || validation.allowApproveWithoutHeader)
+        )
+        || softApprovedWithSingleMissingField
+      )
     ) {
       classification = 'valid';
     } else if (missingRequiredCount >= Number(validation.invalidMissingRequiredAbove || 2)) {
@@ -82,6 +132,10 @@ module.exports = {
 
     if (headerMissing && validation.allowApproveWithoutHeader) {
       reasons.push('Cabecalho ausente, mas permitido pela politica do documento.');
+    }
+
+    if (softApprovedWithSingleMissingField) {
+      reasons.push('Aprovado com um unico campo textual ausente porque os demais campos vieram fortes na imagem.');
     }
 
     if (providerId !== documentProfile.extractionStrategy.primaryProvider) {

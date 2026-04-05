@@ -50,6 +50,9 @@ module.exports = {
     validConfidenceThreshold: 0.82,
     reviewConfidenceThreshold: 0.58,
     invalidMissingRequiredAbove: 2,
+    allowApproveWithSingleNonInvoiceFieldMissing: true,
+    singleMissingFieldConfidenceThreshold: 0.78,
+    singleMissingFieldAverageConfidenceThreshold: 0.74,
     allowApproveWithoutHeader: false,
   },
   operationalResponse: {

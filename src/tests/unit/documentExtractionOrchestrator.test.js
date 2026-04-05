@@ -109,5 +109,90 @@ module.exports = () => {
         }
       },
     },
+    {
+      name: 'documentExtractionOrchestrator aprova foto boa quando so um campo textual nao fecha no OCR',
+      run: async () => {
+        const originalGoogleExtract = googleVisionProvider.extract;
+        const originalOpenAiExtract = openAiRescueProvider.extract;
+        const originalLegacyExtract = legacyProvider.extract;
+
+        googleVisionProvider.extract = async function extractPrimary() {
+          return {
+            providerId: this.id,
+            status: 'success',
+            extractedDocument: {
+              providerId: this.id,
+              fullText: 'NF-e 1710486 DATA DE RECEBIMENTO 20/03/2026',
+              fields: {
+                invoiceNumber: {
+                  key: 'invoiceNumber',
+                  label: 'NF-e',
+                  found: true,
+                  value: '1710486',
+                  confidence: 0.93,
+                  source: 'google_vision',
+                },
+                receiptDate: {
+                  key: 'receiptDate',
+                  label: 'Data de recebimento',
+                  found: true,
+                  value: '20/03/2026',
+                  confidence: 0.9,
+                  source: 'google_vision',
+                },
+                issuerHeader: {
+                  key: 'issuerHeader',
+                  label: 'RECEBEMOS DE MAR E RIO',
+                  found: false,
+                  value: null,
+                  confidence: 0,
+                  source: 'google_vision',
+                },
+              },
+              summary: {
+                foundFieldCount: 2,
+                missingFieldKeys: ['issuerHeader'],
+                averageConfidence: 0.92,
+              },
+            },
+          };
+        };
+        openAiRescueProvider.extract = async function extractFallback() {
+          return {
+            providerId: this.id,
+            status: 'unavailable',
+            reason: 'openai_not_configured',
+          };
+        };
+        legacyProvider.extract = async function extractLegacy() {
+          throw new Error('legacy nao deveria ser chamado');
+        };
+
+        try {
+          const context = resolveProcessingContext({
+            companyId: 'mar-e-rio',
+            sourceId: 'whatsapp',
+            documentType: 'delivery_receipt',
+          });
+          const result = await orchestrator.extract({
+            imagePath: '/tmp/fake-image.jpg',
+            context,
+          });
+
+          assert.strictEqual(result.selectedAttempt.providerId, googleVisionProvider.id);
+          assert.strictEqual(result.decision.classification, 'valid');
+          assert.strictEqual(result.decision.accepted, true);
+          assert.ok(
+            result.decision.reasons.includes(
+              'Aprovado com um unico campo textual ausente porque os demais campos vieram fortes na imagem.',
+            ),
+          );
+        } finally {
+          googleVisionProvider.extract = originalGoogleExtract;
+          openAiRescueProvider.extract = originalOpenAiExtract;
+          legacyProvider.extract = originalLegacyExtract;
+        }
+      },
+    },
   ];
 };

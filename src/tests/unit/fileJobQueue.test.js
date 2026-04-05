@@ -41,5 +41,53 @@ module.exports = () => {
         }
       },
     },
+    {
+      name: 'fileJobQueue processa varias imagens enfileiradas sem perder jobs',
+      run: async () => {
+        const originalQueueDir = env.receiptQueueDir;
+        const tempQueueDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'receipt-queue-test-'));
+        env.receiptQueueDir = tempQueueDir;
+
+        try {
+          const first = await queueService.enqueue({
+            companyId: 'mar-e-rio',
+            source: 'whatsapp',
+            documentType: 'delivery_receipt',
+            payload: {
+              correlationId: 'msg-1',
+            },
+          });
+          const second = await queueService.enqueue({
+            companyId: 'mar-e-rio',
+            source: 'whatsapp',
+            documentType: 'delivery_receipt',
+            payload: {
+              correlationId: 'msg-2',
+            },
+          });
+
+          assert.notStrictEqual(first.id, second.id);
+
+          const claimedFirst = await queueService.claimNextJob('unit-test-worker');
+          const claimedSecond = await queueService.claimNextJob('unit-test-worker');
+
+          assert.ok(claimedFirst);
+          assert.ok(claimedSecond);
+          assert.notStrictEqual(claimedFirst.id, claimedSecond.id);
+
+          await queueService.completeJob(claimedFirst.id, { ok: true, correlationId: 'msg-1' });
+          await queueService.completeJob(claimedSecond.id, { ok: true, correlationId: 'msg-2' });
+
+          const storedFirst = await queueService.getJob(claimedFirst.id);
+          const storedSecond = await queueService.getJob(claimedSecond.id);
+
+          assert.strictEqual(storedFirst.status, 'completed');
+          assert.strictEqual(storedSecond.status, 'completed');
+        } finally {
+          env.receiptQueueDir = originalQueueDir;
+          await fs.promises.rm(tempQueueDir, { recursive: true, force: true });
+        }
+      },
+    },
   ];
 };
