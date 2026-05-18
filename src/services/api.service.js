@@ -76,6 +76,7 @@ const isRealBackendSyncEnabled = () => REAL_BACKEND_SYNC_MODES.has(env.receiptBa
 
 const buildBackendApiHeaders = ({
   includeJsonContentType = true,
+  companyScope = null,
 } = {}) => {
   const token = normalizeText(env.receiptBackendApiToken);
   if (!token) {
@@ -91,7 +92,14 @@ const buildBackendApiHeaders = ({
     headers['content-type'] = 'application/json';
   }
 
-  if (Number.isFinite(env.receiptInvoiceLookupCompanyId) && env.receiptInvoiceLookupCompanyId > 0) {
+  const overrideCompanyId = Number(companyScope && companyScope.id ? companyScope.id : 0);
+  const overrideCompanyCode = normalizeText(companyScope && companyScope.code ? companyScope.code : '');
+
+  if (Number.isFinite(overrideCompanyId) && overrideCompanyId > 0) {
+    headers['x-company-id'] = String(overrideCompanyId);
+  } else if (overrideCompanyCode) {
+    headers['x-company-code'] = overrideCompanyCode;
+  } else if (Number.isFinite(env.receiptInvoiceLookupCompanyId) && env.receiptInvoiceLookupCompanyId > 0) {
     headers['x-company-id'] = String(env.receiptInvoiceLookupCompanyId);
   } else if (normalizeText(env.receiptInvoiceLookupCompanyCode)) {
     headers['x-company-code'] = normalizeText(env.receiptInvoiceLookupCompanyCode);
@@ -155,6 +163,7 @@ const parseJsonSafe = (value) => {
 const requestBackendApi = async (relativePath, {
   method = 'GET',
   body = null,
+  companyScope = null,
 } = {}) => {
   if (!isRemoteBackendApiEnabled()) {
     throw new Error('RECEIPT_BACKEND_API_BASE_URL nao configurado.');
@@ -169,6 +178,7 @@ const requestBackendApi = async (relativePath, {
       method,
       headers: buildBackendApiHeaders({
         includeJsonContentType: body !== null,
+        companyScope,
       }),
       body: body === null ? undefined : JSON.stringify(body),
       signal: controller.signal,
@@ -308,6 +318,25 @@ const buildSystemActor = (companyScope) => {
   };
 };
 
+const normalizeCompanyScopeHint = (companyScope = null) => {
+  if (!companyScope || typeof companyScope !== 'object') return null;
+
+  const id = Number(companyScope.id || companyScope.companyId || 0) || null;
+  const code = normalizeText(companyScope.code || companyScope.companyCode) || null;
+  const name = normalizeText(companyScope.name || companyScope.companyName) || null;
+  const taxId = normalizeText(companyScope.taxId || companyScope.companyTaxId) || null;
+
+  if (!id && !code && !name && !taxId) return null;
+
+  return {
+    id,
+    code,
+    name,
+    taxId,
+    source: companyScope.source || 'override',
+  };
+};
+
 const resolveCompanyScopeFromLookup = async (lookup = null) => {
   if (lookup && lookup.company && Number.isFinite(Number(lookup.company.id)) && Number(lookup.company.id) > 0) {
     return {
@@ -339,7 +368,7 @@ const resolveCompanyScopeFromLookup = async (lookup = null) => {
   return resolveCompanyScope(Company);
 };
 
-const findInvoiceInBackendDb = async (invoiceNumber) => {
+const findInvoiceInBackendDb = async (invoiceNumber, companyScopeHint = null) => {
   const key = normalizeInvoiceNumber(invoiceNumber);
 
   if (!key) {
@@ -353,7 +382,7 @@ const findInvoiceInBackendDb = async (invoiceNumber) => {
   }
 
   const { Company, Danfe } = await loadBackendContext();
-  const companyScope = await resolveCompanyScope(Company);
+  const companyScope = normalizeCompanyScopeHint(companyScopeHint) || await resolveCompanyScope(Company);
   const where = {
     invoice_number: key,
   };
@@ -394,7 +423,7 @@ const findInvoiceInBackendDb = async (invoiceNumber) => {
   };
 };
 
-const findInvoiceInBackendApi = async (invoiceNumber) => {
+const findInvoiceInBackendApi = async (invoiceNumber, companyScopeHint = null) => {
   const key = normalizeInvoiceNumber(invoiceNumber);
 
   if (!key) {
@@ -407,7 +436,10 @@ const findInvoiceInBackendApi = async (invoiceNumber) => {
     };
   }
 
-  const payload = await requestBackendApi(`/api/receipt-bot/danfes/nf/${encodeURIComponent(key)}`);
+  const companyScope = normalizeCompanyScopeHint(companyScopeHint);
+  const payload = await requestBackendApi(`/api/receipt-bot/danfes/nf/${encodeURIComponent(key)}`, {
+    companyScope,
+  });
 
   return {
     found: !!payload.found,
@@ -415,15 +447,18 @@ const findInvoiceInBackendApi = async (invoiceNumber) => {
     deliveryContext: normalizeDeliveryContext(payload.deliveryContext || {}),
     mode: 'backend_api',
     reason: payload.reason || (payload.found ? 'invoice_found' : 'invoice_not_found'),
-    company: payload.company || null,
+    company: payload.company || companyScope || null,
   };
 };
 
-const findInvoiceInConfiguredBackend = async (invoiceNumber, { throwOnError = false } = {}) => {
+const findInvoiceInConfiguredBackend = async (
+  invoiceNumber,
+  { throwOnError = false, companyScope = null } = {},
+) => {
   try {
     return isRemoteBackendApiEnabled()
-      ? await findInvoiceInBackendApi(invoiceNumber)
-      : await findInvoiceInBackendDb(invoiceNumber);
+      ? await findInvoiceInBackendApi(invoiceNumber, companyScope)
+      : await findInvoiceInBackendDb(invoiceNumber, companyScope);
   } catch (error) {
     if (throwOnError) throw error;
 
@@ -581,9 +616,27 @@ const isOperationalInvoiceNumber = (invoiceNumber) => {
   return resolveExpectedInvoiceLengths().includes(normalizedInvoiceNumber.length);
 };
 
-const collectInvoiceCandidatesFromMessageText = (metadata = {}) => {
-  const expectedLengths = new Set(resolveExpectedInvoiceLengths());
+const collectInvoiceCandidatesFromMessageText = (metadata = {}, {
+  expectedLengths = resolveExpectedInvoiceLengths(),
+  allowRawAnyLength = false,
+  allowTrimmedLeadingZeros = false,
+} = {}) => {
+  const normalizedExpectedLengths = Array.isArray(expectedLengths)
+    ? expectedLengths
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => Math.trunc(value))
+    : [];
+  const expectedLengthSet = new Set(normalizedExpectedLengths);
   const candidates = new Set();
+  const maybeAddCandidate = (value) => {
+    const normalizedValue = normalizeText(value).replace(/\D+/g, '');
+    if (!normalizedValue) return;
+
+    if (allowRawAnyLength || !expectedLengthSet.size || expectedLengthSet.has(normalizedValue.length)) {
+      candidates.add(normalizedValue);
+    }
+  };
 
   MESSAGE_TEXT_METADATA_KEYS.forEach((key) => {
     const text = normalizeText(metadata && metadata[key]);
@@ -591,8 +644,13 @@ const collectInvoiceCandidatesFromMessageText = (metadata = {}) => {
 
     const digitGroups = text.match(/\d+/g) || [];
     digitGroups.forEach((digits) => {
-      if (expectedLengths.has(digits.length)) {
-        candidates.add(digits);
+      maybeAddCandidate(digits);
+
+      if (allowTrimmedLeadingZeros) {
+        const trimmedDigits = digits.replace(/^0+/, '');
+        if (trimmedDigits && trimmedDigits !== digits) {
+          maybeAddCandidate(trimmedDigits);
+        }
       }
     });
   });
@@ -814,6 +872,67 @@ const buildWhatsappSuccessSummary = (invoiceNumber, metadata = {}) => {
   return `NF ${normalizedInvoice} marcada como entregue pelo bot no grupo ${groupLabel}.`;
 };
 
+const buildTextOnlyWhatsappAnalysis = ({
+  invoiceNumber,
+  messageTextCandidates = [],
+} = {}) => ({
+  nfExtraction: {
+    nf: normalizeInvoiceNumber(invoiceNumber) || null,
+    confidence: 1,
+    supportCount: 1,
+    origin: 'whatsapp_message_text',
+    method: 'whatsapp_message_text',
+    rawText: null,
+  },
+  classification: {
+    classification: 'valid',
+    reasons: ['NF confirmada pela legenda da mensagem do WhatsApp.'],
+    metrics: {
+      messageTextOnly: true,
+      messageTextCandidateCount: messageTextCandidates.length,
+    },
+  },
+  documentFields: {},
+  documentSummary: {
+    foundFieldCount: 0,
+    missingFieldKeys: [],
+    averageConfidence: 1,
+  },
+});
+
+const buildExpectedCompanyScopeFromMetadata = (metadata = {}) => {
+  const companyScope = normalizeCompanyScopeHint({
+    id: metadata.expectedCompanyId || null,
+    code: metadata.expectedCompanyCode || null,
+    name: metadata.expectedCompanyName || null,
+    source: 'whatsapp_group_policy',
+  });
+
+  return companyScope || normalizeCompanyScopeHint({
+    id: env.receiptInvoiceLookupCompanyId || null,
+    code: env.receiptInvoiceLookupCompanyCode || null,
+    source: 'receipt_lookup_default',
+  });
+};
+
+const getSupportedWhatsappCompanyCodes = () => {
+  const policyEntries = env.whatsappGroupPolicies && typeof env.whatsappGroupPolicies === 'object'
+    ? Object.values(env.whatsappGroupPolicies)
+    : [];
+
+  return Array.from(new Set([
+    normalizeText(env.receiptInvoiceLookupCompanyCode),
+    ...policyEntries.map((policy) => normalizeText(policy && policy.companyCode ? policy.companyCode : '')),
+  ].filter(Boolean)));
+};
+
+const resolveTextOnlyExpectedCompanyLabel = (metadata = {}, fallback = null) => (
+  normalizeText(metadata.expectedCompanyName)
+  || normalizeText(metadata.expectedCompanyCode).replace(/_/g, ' ').toUpperCase()
+  || fallback
+  || 'empresa esperada'
+);
+
 const uploadReceiptEvidence = async ({ invoiceNumber, imagePath, companyScope, metadata = {} }) => {
   if (!imagePath) {
     throw new Error('imagePath e obrigatorio para sincronizar o canhoto real no backend.');
@@ -907,7 +1026,7 @@ const updateInvoiceStatusInBackend = async (invoiceNumber, payload = {}, company
   };
 };
 
-const updateInvoiceStatusInBackendApi = async (invoiceNumber, payload = {}) => {
+const updateInvoiceStatusInBackendApi = async (invoiceNumber, payload = {}, companyScope = null) => {
   const key = normalizeInvoiceNumber(invoiceNumber);
   if (!key) {
     return {
@@ -924,6 +1043,7 @@ const updateInvoiceStatusInBackendApi = async (invoiceNumber, payload = {}) => {
       invoiceNumber: key,
       status: deliveryStatus,
     },
+    companyScope,
   });
 
   return Object.assign({
@@ -968,7 +1088,7 @@ const createAlertInBackend = async (payload = {}, companyScope) => {
   };
 };
 
-const createAlertInBackendApi = async (payload = {}) => {
+const createAlertInBackendApi = async (payload = {}, companyScope = null) => {
   const response = await requestBackendApi('/api/receipt-bot/alerts', {
     method: 'POST',
     body: {
@@ -983,6 +1103,7 @@ const createAlertInBackendApi = async (payload = {}) => {
       severity: payload.severity || 'WARNING',
       metadata: payload.metadata || null,
     },
+    companyScope,
   });
 
   return Object.assign({
@@ -991,7 +1112,12 @@ const createAlertInBackendApi = async (payload = {}) => {
   }, response && typeof response === 'object' ? response : {});
 };
 
-const importRecoveredReceiptInBackendApi = async ({ invoiceNumber, imagePath, metadata = {} }) => {
+const importRecoveredReceiptInBackendApi = async ({
+  invoiceNumber,
+  imagePath,
+  metadata = {},
+  companyScope = null,
+}) => {
   const key = normalizeInvoiceNumber(invoiceNumber);
   if (!key) {
     return {
@@ -1032,6 +1158,7 @@ const importRecoveredReceiptInBackendApi = async ({ invoiceNumber, imagePath, me
       method: 'POST',
       headers: buildBackendApiHeaders({
         includeJsonContentType: false,
+        companyScope,
       }),
       body: form,
       signal: controller.signal,
@@ -1132,9 +1259,14 @@ const importRecoveredReceiptInBackend = async ({ invoiceNumber, imagePath, compa
 };
 
 module.exports = {
-  async findInvoiceByNumber(invoiceNumber) {
+  async findInvoiceByNumber(invoiceNumber, options = {}) {
     const lookupMode = env.receiptInvoiceLookupMode;
     const key = normalizeInvoiceNumber(invoiceNumber);
+    const scopedCompany = normalizeCompanyScopeHint(options.companyScope || {
+      id: options.companyId || null,
+      code: options.companyCode || null,
+      name: options.companyName || null,
+    });
 
     if (!key) {
       return {
@@ -1160,7 +1292,7 @@ module.exports = {
 
     if (lookupMode === 'backend_db') {
       try {
-        return await findInvoiceInBackendDb(key);
+        return await findInvoiceInBackendDb(key, scopedCompany);
       } catch (error) {
         return {
           found: false,
@@ -1174,19 +1306,28 @@ module.exports = {
     }
 
     if (lookupMode === 'backend_api') {
-      return findInvoiceInConfiguredBackend(key, { throwOnError: false });
+      return findInvoiceInConfiguredBackend(key, {
+        throwOnError: false,
+        companyScope: scopedCompany,
+      });
     }
 
     if (lookupMode === 'auto') {
       if (isRemoteBackendApiEnabled()) {
-        const lookup = await findInvoiceInConfiguredBackend(key, { throwOnError: false });
+        const lookup = await findInvoiceInConfiguredBackend(key, {
+          throwOnError: false,
+          companyScope: scopedCompany,
+        });
         if (lookup.reason !== 'lookup_error') {
           return Object.assign({}, lookup, {
             mode: lookup.mode === 'backend_api' ? 'backend_api' : lookup.mode,
           });
         }
       } else {
-        const lookup = await findInvoiceInConfiguredBackend(key, { throwOnError: false });
+        const lookup = await findInvoiceInConfiguredBackend(key, {
+          throwOnError: false,
+          companyScope: scopedCompany,
+        });
         if (lookup.reason !== 'lookup_error') {
           return Object.assign({}, lookup, {
             mode: lookup.mode === 'backend_db' ? 'backend_db' : lookup.mode,
@@ -1227,7 +1368,9 @@ module.exports = {
       };
     }
 
-    const lookup = payload.lookup || await this.findInvoiceByNumber(invoiceNumber);
+    const lookup = payload.lookup || await this.findInvoiceByNumber(invoiceNumber, {
+      companyScope: payload.companyScope || null,
+    });
     const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
 
     if (!companyScope || !Number.isFinite(Number(companyScope.id)) || Number(companyScope.id) <= 0) {
@@ -1268,10 +1411,13 @@ module.exports = {
         invoiceNumber,
         imagePath: payload.imagePath,
         metadata: payload.metadata || {},
+        companyScope: payload.companyScope || null,
       });
     }
 
-    const lookup = payload.lookup || await this.findInvoiceByNumber(invoiceNumber);
+    const lookup = payload.lookup || await this.findInvoiceByNumber(invoiceNumber, {
+      companyScope: payload.companyScope || null,
+    });
     const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
 
     if (!companyScope || !Number.isFinite(Number(companyScope.id)) || Number(companyScope.id) <= 0) {
@@ -1320,12 +1466,13 @@ module.exports = {
       };
     }
 
+    const lookup = await findInvoiceInConfiguredBackend(invoiceNumber, { throwOnError: true });
+    const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
+
     if (isRemoteBackendApiEnabled()) {
-      return updateInvoiceStatusInBackendApi(invoiceNumber, payload);
+      return updateInvoiceStatusInBackendApi(invoiceNumber, payload, companyScope);
     }
 
-    const lookup = await findInvoiceInBackendDb(invoiceNumber);
-    const companyScope = await resolveCompanyScopeFromLookup(lookup);
     return updateInvoiceStatusInBackend(invoiceNumber, payload, companyScope);
   },
 
@@ -1352,21 +1499,20 @@ module.exports = {
           ? buildWhatsappAlertDedupeKey(payload.code, payload.metadata)
           : ''
       );
-
-    if (isRemoteBackendApiEnabled()) {
-      return createAlertInBackendApi(Object.assign({}, payload, {
-        invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
-        dedupeKey: dedupeKey || null,
-      }));
-    }
-
     const companyScope = payload.companyId
       ? {
         id: Number(payload.companyId),
         code: payload.companyCode || null,
         source: 'payload',
       }
-      : await resolveCompanyScopeFromLookup(payload.lookup || null);
+      : (payload.companyScope || await resolveCompanyScopeFromLookup(payload.lookup || null));
+
+    if (isRemoteBackendApiEnabled()) {
+      return createAlertInBackendApi(Object.assign({}, payload, {
+        invoiceNumber: invoiceNumber || payload.invoiceNumber || payload.nfNumber || null,
+        dedupeKey: dedupeKey || null,
+      }), companyScope);
+    }
     const deliveryContext = invoiceNumber && Number.isFinite(Number(companyScope.id)) && Number(companyScope.id) > 0
       ? await resolveDeliveryContext(invoiceNumber, Number(companyScope.id))
       : {
@@ -1427,7 +1573,10 @@ module.exports = {
       };
     }
 
-    const lookup = payload.lookup || await findInvoiceInConfiguredBackend(invoiceNumber, { throwOnError: true });
+    const lookup = payload.lookup || await findInvoiceInConfiguredBackend(invoiceNumber, {
+      throwOnError: true,
+      companyScope: payload.companyScope || null,
+    });
     const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
     const deliveryContext = payload.deliveryContext
       ? normalizeDeliveryContext(payload.deliveryContext)
@@ -1457,6 +1606,7 @@ module.exports = {
           classification: payload.classification || 'valid',
           metadata,
         },
+        companyScope,
       });
 
       return Object.assign({
@@ -1495,7 +1645,7 @@ module.exports = {
   async syncAnalysisResult(analysis = {}, options = {}) {
     const syncMode = env.receiptBackendSyncMode;
     let invoiceNumber = normalizeInvoiceNumber(analysis.nfExtraction && analysis.nfExtraction.nf);
-    let lookup = null;
+    let lookup = options.initialLookup || null;
     let companyScope = null;
     let deliveryContext = null;
     let operationalValidation = null;
@@ -1507,18 +1657,25 @@ module.exports = {
     let promotedFromReview = false;
     let promotionReason = null;
 
-    if (invoiceNumber) {
+    if (invoiceNumber && !lookup) {
       lookup = isRealBackendSyncEnabled()
-        ? await findInvoiceInConfiguredBackend(invoiceNumber, { throwOnError: true })
-        : (analysis.invoiceLookup || await this.findInvoiceByNumber(invoiceNumber));
+        ? await findInvoiceInConfiguredBackend(invoiceNumber, {
+          throwOnError: true,
+          companyScope: options.companyScope || null,
+        })
+        : (analysis.invoiceLookup || await this.findInvoiceByNumber(invoiceNumber, {
+          companyScope: options.companyScope || null,
+        }));
     }
 
-    const messageTextRescue = await resolveMessageTextInvoiceRescue({
-      analysis: effectiveAnalysis,
-      metadata: effectiveMetadata,
-      invoiceNumber,
-      lookup,
-    });
+    const messageTextRescue = options.skipMessageTextRescue
+      ? null
+      : await resolveMessageTextInvoiceRescue({
+        analysis: effectiveAnalysis,
+        metadata: effectiveMetadata,
+        invoiceNumber,
+        lookup,
+      });
 
     if (messageTextRescue) {
       effectiveAnalysis = messageTextRescue.analysis;
@@ -1529,7 +1686,7 @@ module.exports = {
       );
     }
 
-    if (invoiceNumber && !isOperationalInvoiceNumber(invoiceNumber)) {
+    if (!options.skipOperationalInvoiceValidation && invoiceNumber && !isOperationalInvoiceNumber(invoiceNumber)) {
       return {
         mode: syncMode,
         action: 'none',
@@ -1661,19 +1818,29 @@ module.exports = {
 
       const upload = syncAction.uploadReceipt
         ? (
-          isRemoteBackendApiEnabled()
-            ? {
-              uploaded: false,
-              skipped: true,
-              mode: 'backend_api',
-              reason: 'remote_upload_not_supported',
-            }
-            : await uploadReceiptEvidence({
+          options.receiptEvidenceMode === 'recovered_import'
+            ? await this.importRecoveredReceiptEvidence({
               invoiceNumber: syncAction.invoiceNumber,
               imagePath: options.imagePath,
               companyScope,
+              lookup,
               metadata: effectiveMetadata,
             })
+            : (
+              isRemoteBackendApiEnabled()
+                ? {
+                  uploaded: false,
+                  skipped: true,
+                  mode: 'backend_api',
+                  reason: 'remote_upload_not_supported',
+                }
+                : await uploadReceiptEvidence({
+                  invoiceNumber: syncAction.invoiceNumber,
+                  imagePath: options.imagePath,
+                  companyScope,
+                  metadata: effectiveMetadata,
+                })
+            )
         )
         : {
           uploaded: false,
@@ -1684,7 +1851,7 @@ module.exports = {
       const update = isRemoteBackendApiEnabled()
         ? await updateInvoiceStatusInBackendApi(syncAction.invoiceNumber, {
           deliveryStatus: 'delivered',
-        })
+        }, companyScope)
         : await updateInvoiceStatusInBackend(syncAction.invoiceNumber, {
           deliveryStatus: 'delivered',
         }, companyScope);
@@ -1748,6 +1915,177 @@ module.exports = {
       lookup,
       alert,
     };
+  },
+
+  async syncWhatsappTextReceipt({ imagePath = null, metadata = {} } = {}) {
+    const expectedCompanyScope = buildExpectedCompanyScopeFromMetadata(metadata || {});
+    const expectedCompanyLabel = resolveTextOnlyExpectedCompanyLabel(metadata);
+    const normalizedMetadata = Object.assign({}, metadata || {}, {
+      source: 'whatsapp',
+      sourceName: metadata && metadata.sourceName ? metadata.sourceName : 'whatsapp',
+      whatsappProcessingMode: 'caption_only',
+      expectedCompanyCode: expectedCompanyScope && expectedCompanyScope.code ? expectedCompanyScope.code : null,
+      expectedCompanyId: expectedCompanyScope && expectedCompanyScope.id ? expectedCompanyScope.id : null,
+      expectedCompanyName: expectedCompanyLabel,
+    });
+    const invoiceCandidates = collectInvoiceCandidatesFromMessageText(normalizedMetadata, {
+      expectedLengths: [],
+      allowRawAnyLength: true,
+      allowTrimmedLeadingZeros: true,
+    });
+
+    const createTextAlert = async ({
+      code,
+      title,
+      message,
+      invoiceNumber = null,
+      reason,
+      replyMessage = null,
+      extraMetadata = {},
+    }) => {
+      const alert = await this.createReceiptAlert({
+        companyId: expectedCompanyScope && expectedCompanyScope.id ? expectedCompanyScope.id : null,
+        companyCode: expectedCompanyScope && expectedCompanyScope.code ? expectedCompanyScope.code : null,
+        invoiceNumber,
+        code,
+        title,
+        message,
+        severity: code === 'RECEIPT_WHATSAPP_GROUP_COMPANY_MISMATCH' ? 'CRITICAL' : 'WARNING',
+        metadata: Object.assign({}, normalizedMetadata, {
+          backendAction: 'create_receipt_alert',
+          backendMode: env.receiptBackendSyncMode,
+          messageTextCandidates: invoiceCandidates,
+        }, extraMetadata),
+      });
+
+      return {
+        mode: env.receiptBackendSyncMode,
+        action: 'create_receipt_alert',
+        reason,
+        alert,
+        replyMessage,
+      };
+    };
+
+    if (!invoiceCandidates.length) {
+      return createTextAlert({
+        code: 'RECEIPT_NF_NOT_DETECTED',
+        title: `Nao foi possivel identificar a NF no grupo ${normalizedMetadata.groupName || 'desconhecido'}`,
+        message: `A foto foi enviada no grupo ${normalizedMetadata.groupName || 'desconhecido'}, mas a legenda nao trouxe uma NF valida para ${expectedCompanyLabel}.`,
+        reason: 'message_text_nf_not_detected',
+        replyMessage: 'Nao consegui identificar a NF no texto enviado junto com a foto. Reenvie informando a NF.',
+      });
+    }
+
+    const expectedMatches = [];
+    for (const candidate of invoiceCandidates) {
+      const lookup = isRealBackendSyncEnabled()
+        ? await findInvoiceInConfiguredBackend(candidate, {
+          throwOnError: true,
+          companyScope: expectedCompanyScope,
+        })
+        : await this.findInvoiceByNumber(candidate, {
+          companyScope: expectedCompanyScope,
+        });
+      if (lookup && lookup.found) {
+        expectedMatches.push({
+          invoiceNumber: candidate,
+          lookup,
+        });
+      }
+    }
+
+    if (expectedMatches.length === 1) {
+      const matched = expectedMatches[0];
+      return this.syncAnalysisResult(buildTextOnlyWhatsappAnalysis({
+        invoiceNumber: matched.invoiceNumber,
+        messageTextCandidates: invoiceCandidates,
+      }), {
+        imagePath,
+        metadata: Object.assign({}, normalizedMetadata, {
+          messageTextInvoiceRescued: true,
+          messageTextInvoiceNumber: matched.invoiceNumber,
+          messageTextCandidates: invoiceCandidates,
+          originalInvoiceNumber: matched.invoiceNumber,
+        }),
+        initialLookup: matched.lookup,
+        companyScope: expectedCompanyScope,
+        skipMessageTextRescue: true,
+        skipOperationalInvoiceValidation: true,
+        receiptEvidenceMode: 'recovered_import',
+      });
+    }
+
+    if (expectedMatches.length > 1) {
+      return createTextAlert({
+        code: 'RECEIPT_MANUAL_REVIEW_REQUIRED',
+        title: `Mais de uma NF foi localizada para o grupo ${normalizedMetadata.groupName || 'desconhecido'}`,
+        message: `A legenda da mensagem gerou multiplas NFs validas para ${expectedCompanyLabel}: ${expectedMatches.map((entry) => entry.invoiceNumber).join(', ')}.`,
+        reason: 'ambiguous_message_text_candidates',
+        replyMessage: 'Encontrei mais de uma NF possivel na mensagem. Reenvie informando apenas uma NF.',
+      });
+    }
+
+    const mismatchMatches = [];
+    const alternateCompanyCodes = getSupportedWhatsappCompanyCodes().filter((companyCode) => (
+      companyCode
+      && companyCode !== (expectedCompanyScope && expectedCompanyScope.code ? expectedCompanyScope.code : null)
+    ));
+
+    for (const companyCode of alternateCompanyCodes) {
+      for (const candidate of invoiceCandidates) {
+        const lookup = isRealBackendSyncEnabled()
+          ? await findInvoiceInConfiguredBackend(candidate, {
+            throwOnError: true,
+            companyScope: { code: companyCode },
+          })
+          : await this.findInvoiceByNumber(candidate, {
+            companyCode,
+          });
+        if (lookup && lookup.found) {
+          mismatchMatches.push({
+            invoiceNumber: candidate,
+            lookup,
+            companyCode,
+          });
+        }
+      }
+    }
+
+    if (mismatchMatches.length === 1) {
+      const mismatch = mismatchMatches[0];
+      const actualCompanyLabel = normalizeText(
+        mismatch.lookup
+        && mismatch.lookup.company
+        && (mismatch.lookup.company.name || mismatch.lookup.company.code)
+          ? mismatch.lookup.company.name || mismatch.lookup.company.code
+          : mismatch.companyCode,
+      ) || 'outra empresa';
+
+      return createTextAlert({
+        code: 'RECEIPT_WHATSAPP_GROUP_COMPANY_MISMATCH',
+        title: `Canhoto da empresa ${actualCompanyLabel} postado no grupo ${normalizedMetadata.groupName || 'desconhecido'}`,
+        message: `A NF ${mismatch.invoiceNumber} foi enviada no grupo ${normalizedMetadata.groupName || 'desconhecido'}, esperado para ${expectedCompanyLabel}, mas pertence a ${actualCompanyLabel}.`,
+        invoiceNumber: mismatch.invoiceNumber,
+        reason: 'group_company_mismatch',
+        replyMessage: `A NF ${mismatch.invoiceNumber} pertence a ${actualCompanyLabel}. Confira se a foto foi enviada no grupo correto.`,
+        extraMetadata: {
+          companyMismatch: true,
+          actualCompanyCode: mismatch.lookup && mismatch.lookup.company ? mismatch.lookup.company.code || mismatch.companyCode : mismatch.companyCode,
+          actualCompanyId: mismatch.lookup && mismatch.lookup.company ? mismatch.lookup.company.id || null : null,
+          actualCompanyName: actualCompanyLabel,
+        },
+      });
+    }
+
+    return createTextAlert({
+      code: 'NF_NOT_FOUND_UPLOAD_ATTEMPT',
+      title: `NF nao encontrada para ${expectedCompanyLabel}`,
+      message: `Nenhuma das NFs informadas na legenda (${invoiceCandidates.join(', ')}) foi encontrada na base operacional de ${expectedCompanyLabel}.`,
+      invoiceNumber: invoiceCandidates[0] || null,
+      reason: 'invoice_not_found_from_message_text',
+      replyMessage: 'Nao encontrei a NF informada na base operacional. Confira o numero e tente novamente.',
+    });
   },
 
   async syncProcessingResult(processingResult = {}, options = {}) {

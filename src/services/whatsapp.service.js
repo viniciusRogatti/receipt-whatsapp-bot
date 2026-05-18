@@ -7,6 +7,9 @@ const {
 const receiptAnalysisService = require('./receiptAnalysis.service');
 const apiService = require('./api.service');
 const receiptIngestionService = require('./ingestion/receiptIngestion.service');
+const {
+  resolveWhatsappGroupPolicy,
+} = require('./whatsappRuntimeSupport.service');
 
 const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
 
@@ -49,6 +52,11 @@ const buildMessageMetadata = (message = {}) => {
     || message.caption
     || message.body,
   );
+  const groupPolicy = resolveWhatsappGroupPolicy({
+    groupId: message.groupId || message.chatId || null,
+    groupName: message.groupName || null,
+    groupPolicies: env.whatsappGroupPolicies,
+  });
 
   return {
     source: 'whatsapp',
@@ -67,6 +75,10 @@ const buildMessageMetadata = (message = {}) => {
     messageText: messageText || null,
     caption: messageText || null,
     body: messageText || null,
+    whatsappProcessingMode: groupPolicy.processingMode || 'ocr',
+    expectedCompanyCode: groupPolicy.companyCode || null,
+    expectedCompanyId: groupPolicy.companyId || null,
+    expectedCompanyName: groupPolicy.companyName || null,
   };
 };
 
@@ -84,6 +96,35 @@ module.exports = {
   async handleIncomingImageMessage({ message, mediaPath, reply, outputDir }) {
     try {
       const messageMetadata = buildMessageMetadata(message);
+
+      if (messageMetadata.whatsappProcessingMode === 'caption_only') {
+        const backendSync = await apiService.syncWhatsappTextReceipt({
+          imagePath: mediaPath,
+          metadata: messageMetadata,
+        });
+
+        let replyMessage = null;
+        if (
+          backendSync
+          && backendSync.action === 'create_receipt_alert'
+          && env.whatsappReplyOnOperationalFailure
+        ) {
+          replyMessage = backendSync.replyMessage || null;
+        }
+
+        let replied = false;
+        if (replyMessage && typeof reply === 'function') {
+          replied = !!(await reply(replyMessage, message));
+        }
+
+        return {
+          analysis: null,
+          backendSync,
+          backendSyncError: null,
+          replied,
+          replyMessage,
+        };
+      }
 
       if (env.receiptAsyncWhatsappMode) {
         const ingestResult = await receiptIngestionService.ingestReceipt({

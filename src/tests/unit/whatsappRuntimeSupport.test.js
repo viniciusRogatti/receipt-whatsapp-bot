@@ -2,6 +2,7 @@ const assert = require('assert');
 const {
   isGroupAllowed,
   parseTextCommand,
+  resolveWhatsappGroupPolicy,
   resolveMediaFileName,
 } = require('../../services/whatsappRuntimeSupport.service');
 
@@ -56,6 +57,28 @@ module.exports = () => {
         });
 
         assert.strictEqual(fileName, 'ABCD_123.webp');
+      },
+    },
+    {
+      name: 'whatsappRuntimeSupport resolve politica por nome normalizado do grupo',
+      run: () => {
+        const policy = resolveWhatsappGroupPolicy({
+          groupName: '  Canhotos   Pronto ',
+          groupPolicies: {
+            'canhotos pronto': {
+              processingMode: 'caption_only',
+              companyCode: 'pronto',
+            },
+          },
+        });
+
+        assert.deepStrictEqual(policy, {
+          key: 'canhotos pronto',
+          processingMode: 'caption_only',
+          companyCode: 'pronto',
+          companyId: null,
+          companyName: null,
+        });
       },
     },
   ];

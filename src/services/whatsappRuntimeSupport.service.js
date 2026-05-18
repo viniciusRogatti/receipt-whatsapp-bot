@@ -1,6 +1,9 @@
 const path = require('path');
 
 const normalizeText = (value) => String(value || '').trim();
+const normalizeGroupPolicyKey = (value) => normalizeText(value)
+  .toLowerCase()
+  .replace(/\s+/g, ' ');
 
 const normalizeCollection = (values = [], { lowerCase = false } = {}) => {
   return values
@@ -74,11 +77,53 @@ const parseTextCommand = ({ body = '', prefix = '!recibo' }) => {
   };
 };
 
+const resolveWhatsappGroupPolicy = ({
+  groupId,
+  groupName,
+  groupPolicies = {},
+} = {}) => {
+  const normalizedId = normalizeText(groupId);
+  const normalizedName = normalizeGroupPolicyKey(groupName);
+  const entries = groupPolicies && typeof groupPolicies === 'object' && !Array.isArray(groupPolicies)
+    ? Object.entries(groupPolicies)
+    : [];
+
+  const matchedEntry = entries.find(([key]) => {
+    const normalizedKey = normalizeGroupPolicyKey(key);
+    if (!normalizedKey) return false;
+    return normalizedKey === normalizedName || normalizedKey === normalizedId;
+  });
+
+  if (!matchedEntry) {
+    return {
+      key: normalizedName || normalizedId || null,
+      processingMode: 'ocr',
+      companyCode: null,
+      companyId: null,
+      companyName: null,
+    };
+  }
+
+  const [, policy] = matchedEntry;
+  const normalizedPolicy = policy && typeof policy === 'object' && !Array.isArray(policy)
+    ? policy
+    : {};
+
+  return {
+    key: normalizeGroupPolicyKey(matchedEntry[0]) || normalizedName || normalizedId || null,
+    processingMode: normalizeText(normalizedPolicy.processingMode || normalizedPolicy.mode).toLowerCase() || 'ocr',
+    companyCode: normalizeText(normalizedPolicy.companyCode) || null,
+    companyId: normalizeText(normalizedPolicy.companyId) || null,
+    companyName: normalizeText(normalizedPolicy.companyName) || null,
+  };
+};
+
 module.exports = {
   guessExtensionFromMimeType,
   isGroupAllowed,
   isGroupMessage,
   isImageMimeType,
   parseTextCommand,
+  resolveWhatsappGroupPolicy,
   resolveMediaFileName,
 };

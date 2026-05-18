@@ -1,4 +1,7 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const env = require('../../config/env');
 const apiService = require('../../services/api.service');
 
@@ -60,7 +63,7 @@ module.exports = () => {
           assert.strictEqual(requests.length, 1);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/alerts');
           assert.strictEqual(requests[0].options.method, 'POST');
-          assert.strictEqual(requests[0].options.headers['x-company-code'], 'mar_e_rio');
+          assert.strictEqual(requests[0].options.headers['x-company-id'], '1');
         } finally {
           env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
           env.receiptBackendApiToken = originalBackendApiToken;
@@ -845,6 +848,292 @@ module.exports = () => {
           assert.strictEqual(activityBody.metadata.messageTextInvoiceRescued, true);
           assert.strictEqual(activityBody.metadata.messageTextInvoiceNumber, '1721192');
           assert.strictEqual(activityBody.metadata.messageText, 'NF 1721192');
+        } finally {
+          env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
+          env.receiptBackendApiToken = originalBackendApiToken;
+          env.receiptBackendSyncMode = originalBackendSyncMode;
+          env.backendRoot = originalBackendRoot;
+          env.receiptInvoiceLookupCompanyCode = originalCompanyCode;
+          env.receiptInvoiceLookupCompanyId = originalCompanyId;
+          global.fetch = originalFetch;
+          await apiService.shutdown().catch(() => undefined);
+        }
+      },
+    },
+    {
+      name: 'apiService em backend_api usa legenda com zero a esquerda no fluxo caption_only por grupo',
+      run: async () => {
+        const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
+        const originalBackendApiToken = env.receiptBackendApiToken;
+        const originalBackendSyncMode = env.receiptBackendSyncMode;
+        const originalBackendRoot = env.backendRoot;
+        const originalCompanyCode = env.receiptInvoiceLookupCompanyCode;
+        const originalCompanyId = env.receiptInvoiceLookupCompanyId;
+        const originalFetch = global.fetch;
+        const requests = [];
+
+        env.receiptBackendApiBaseUrl = 'https://backend.example';
+        env.receiptBackendApiToken = 'token-de-teste';
+        env.receiptBackendSyncMode = 'full';
+        env.backendRoot = '/backend-inexistente-para-teste';
+        env.receiptInvoiceLookupCompanyCode = 'mar_e_rio';
+        env.receiptInvoiceLookupCompanyId = null;
+        const tempImagePath = path.join(os.tmpdir(), `receipt-whatsapp-bot-${Date.now()}.jpg`);
+        fs.writeFileSync(tempImagePath, Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+        global.fetch = async (url, options = {}) => {
+          requests.push({ url, options });
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/00006284')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                found: false,
+                reason: 'invoice_not_found',
+                company: {
+                  id: 3,
+                  code: 'pronto',
+                  name: 'PRONTO INDUSTRIA DE ALIMENTOS LTDA',
+                },
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/6284')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                found: true,
+                invoice: {
+                  invoiceNumber: '6284',
+                },
+                company: {
+                  id: 3,
+                  code: 'pronto',
+                  name: 'PRONTO INDUSTRIA DE ALIMENTOS LTDA',
+                },
+                deliveryContext: {
+                  tripId: 91,
+                  tripNoteId: 92,
+                  driverId: 93,
+                },
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/recovered-receipts')) {
+            return {
+              ok: true,
+              status: 201,
+              text: async () => JSON.stringify({
+                created: true,
+                receipt: {
+                  id: 88,
+                },
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/danfes/status')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                updated: true,
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/whatsapp-success-activity')) {
+            return {
+              ok: true,
+              status: 201,
+              text: async () => JSON.stringify({
+                created: true,
+                eventId: 900,
+              }),
+            };
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        };
+
+        try {
+          const result = await apiService.syncWhatsappTextReceipt({
+            imagePath: tempImagePath,
+            metadata: {
+              groupId: '120363555@g.us',
+              groupName: 'Canhotos Pronto',
+              messageId: 'wamid-pronto-1',
+              senderName: 'Motorista 1',
+              messageText: 'NF 00006284',
+              caption: 'NF 00006284',
+              body: 'NF 00006284',
+              expectedCompanyCode: 'pronto',
+              expectedCompanyId: 3,
+              expectedCompanyName: 'PRONTO',
+            },
+          });
+
+          assert.strictEqual(result.action, 'mark_invoice_delivered');
+          assert.strictEqual(requests.length, 5);
+          assert.strictEqual(requests[0].options.headers['x-company-id'], '3');
+          assert.strictEqual(requests[1].options.headers['x-company-id'], '3');
+          assert.strictEqual(requests[2].options.headers['x-company-id'], '3');
+          assert.strictEqual(requests[3].options.headers['x-company-id'], '3');
+          assert.strictEqual(requests[4].options.headers['x-company-id'], '3');
+
+          const statusBody = JSON.parse(requests[3].options.body);
+          assert.strictEqual(statusBody.invoiceNumber, '6284');
+
+          const activityBody = JSON.parse(requests[4].options.body);
+          assert.strictEqual(activityBody.invoiceNumber, '6284');
+          assert.strictEqual(activityBody.metadata.messageTextInvoiceNumber, '6284');
+          assert.deepStrictEqual(activityBody.metadata.messageTextCandidates, ['00006284', '6284']);
+        } finally {
+          env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
+          env.receiptBackendApiToken = originalBackendApiToken;
+          env.receiptBackendSyncMode = originalBackendSyncMode;
+          env.backendRoot = originalBackendRoot;
+          env.receiptInvoiceLookupCompanyCode = originalCompanyCode;
+          env.receiptInvoiceLookupCompanyId = originalCompanyId;
+          global.fetch = originalFetch;
+          if (fs.existsSync(tempImagePath)) fs.unlinkSync(tempImagePath);
+          await apiService.shutdown().catch(() => undefined);
+        }
+      },
+    },
+    {
+      name: 'apiService em backend_api cria alerta quando a NF da legenda pertence a outra empresa do grupo esperado',
+      run: async () => {
+        const originalBackendApiBaseUrl = env.receiptBackendApiBaseUrl;
+        const originalBackendApiToken = env.receiptBackendApiToken;
+        const originalBackendSyncMode = env.receiptBackendSyncMode;
+        const originalBackendRoot = env.backendRoot;
+        const originalCompanyCode = env.receiptInvoiceLookupCompanyCode;
+        const originalCompanyId = env.receiptInvoiceLookupCompanyId;
+        const originalFetch = global.fetch;
+        const requests = [];
+
+        env.receiptBackendApiBaseUrl = 'https://backend.example';
+        env.receiptBackendApiToken = 'token-de-teste';
+        env.receiptBackendSyncMode = 'status_only';
+        env.backendRoot = '/backend-inexistente-para-teste';
+        env.receiptInvoiceLookupCompanyCode = 'mar_e_rio';
+        env.receiptInvoiceLookupCompanyId = null;
+
+        global.fetch = async (url, options = {}) => {
+          requests.push({ url, options });
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/00006284')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify({
+                found: false,
+                reason: 'invoice_not_found',
+              }),
+            };
+          }
+
+          if (url.endsWith('/api/receipt-bot/danfes/nf/6284')) {
+            const companyHeader = options.headers['x-company-code'];
+            if (companyHeader === 'pronto' || options.headers['x-company-id'] === '3') {
+              return {
+                ok: true,
+                status: 200,
+                text: async () => JSON.stringify({
+                  found: false,
+                  reason: 'invoice_not_found',
+                  company: {
+                    id: 3,
+                    code: 'pronto',
+                    name: 'PRONTO INDUSTRIA DE ALIMENTOS LTDA',
+                  },
+                }),
+              };
+            }
+
+            if (companyHeader === 'mar_e_rio') {
+              return {
+                ok: true,
+                status: 200,
+                text: async () => JSON.stringify({
+                  found: true,
+                  invoice: {
+                    invoiceNumber: '6284',
+                  },
+                  company: {
+                    id: 1,
+                    code: 'mar_e_rio',
+                    name: 'MAR E RIO',
+                  },
+                }),
+              };
+            }
+
+            if (companyHeader === 'brazilian_fish') {
+              return {
+                ok: true,
+                status: 200,
+                text: async () => JSON.stringify({
+                  found: false,
+                  reason: 'invoice_not_found',
+                  company: {
+                    id: 2,
+                    code: 'brazilian_fish',
+                    name: 'BRAZILIAN FISH',
+                  },
+                }),
+              };
+            }
+          }
+
+          if (url.endsWith('/api/receipt-bot/alerts')) {
+            return {
+              ok: true,
+              status: 201,
+              text: async () => JSON.stringify({
+                created: true,
+                alert: {
+                  id: 901,
+                },
+              }),
+            };
+          }
+
+          throw new Error(`Unexpected request: ${url}`);
+        };
+
+        try {
+          const result = await apiService.syncWhatsappTextReceipt({
+            metadata: {
+              groupId: '120363555@g.us',
+              groupName: 'Canhotos Pronto',
+              messageId: 'wamid-pronto-2',
+              senderName: 'Motorista 2',
+              messageText: 'NF 00006284',
+              caption: 'NF 00006284',
+              body: 'NF 00006284',
+              expectedCompanyCode: 'pronto',
+              expectedCompanyId: 3,
+              expectedCompanyName: 'PRONTO',
+            },
+          });
+
+          assert.strictEqual(result.action, 'create_receipt_alert');
+          assert.strictEqual(result.reason, 'group_company_mismatch');
+          const alertRequest = requests.find((entry) => entry.url.endsWith('/api/receipt-bot/alerts'));
+          assert.ok(alertRequest);
+          assert.strictEqual(alertRequest.options.headers['x-company-id'], '3');
+
+          const alertBody = JSON.parse(alertRequest.options.body);
+          assert.strictEqual(alertBody.code, 'RECEIPT_WHATSAPP_GROUP_COMPANY_MISMATCH');
+          assert.strictEqual(alertBody.invoiceNumber, '6284');
+          assert.strictEqual(alertBody.metadata.companyMismatch, true);
+          assert.strictEqual(alertBody.metadata.actualCompanyCode, 'mar_e_rio');
         } finally {
           env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
           env.receiptBackendApiToken = originalBackendApiToken;

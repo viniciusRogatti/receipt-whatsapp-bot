@@ -74,6 +74,23 @@ const configuredReceiptProfileId = String(
 ).trim();
 const resolvedReceiptProfile = getReceiptProfileById(configuredReceiptProfileId)
   || getReceiptProfileById(DEFAULT_RECEIPT_PROFILE_ID);
+const DEFAULT_WHATSAPP_GROUP_POLICIES = {
+  'kp - canhotos': {
+    processingMode: 'ocr',
+    companyCode: 'mar_e_rio',
+    companyName: 'MAR E RIO',
+  },
+  'canhotos brazilianfish': {
+    processingMode: 'caption_only',
+    companyCode: 'brazilian_fish',
+    companyName: 'BRAZILIAN FISH',
+  },
+  'canhotos pronto': {
+    processingMode: 'caption_only',
+    companyCode: 'pronto',
+    companyName: 'PRONTO',
+  },
+};
 
 const env = {
   botEnv: process.env.BOT_ENV || 'development',
@@ -222,6 +239,10 @@ const env = {
   whatsappBrowserArgs: parseCsvList(process.env.WHATSAPP_BROWSER_ARGS, []),
   whatsappAllowedGroupIds: parseCsvList(process.env.WHATSAPP_ALLOWED_GROUP_IDS, []),
   whatsappAllowedGroupNames: parseCsvList(process.env.WHATSAPP_ALLOWED_GROUP_NAMES, []),
+  whatsappGroupPolicies: parseJsonObject(
+    process.env.WHATSAPP_GROUP_POLICIES,
+    DEFAULT_WHATSAPP_GROUP_POLICIES,
+  ),
   whatsappReplyEnabled: parseBoolean(process.env.WHATSAPP_REPLY_ENABLED, true),
   whatsappReplyOnOperationalFailure: parseBoolean(process.env.WHATSAPP_REPLY_ON_OPERATIONAL_FAILURE, true),
   whatsappCommandsEnabled: parseBoolean(process.env.WHATSAPP_COMMANDS_ENABLED, true),
