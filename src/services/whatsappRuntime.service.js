@@ -15,6 +15,10 @@ const {
 } = require('./whatsappRuntimeSupport.service');
 
 let activeClient = null;
+let restartScheduled = false;
+
+const STARTUP_TIMEOUT_MS = 600000;
+const AUTHENTICATED_READY_GRACE_MS = 30000;
 
 const extractPhoneDigits = (value) => {
   const match = String(value || '').match(/^(\d+)(?:@|$)/);
@@ -39,6 +43,7 @@ const buildPuppeteerOptions = () => {
   const options = {
     headless: env.whatsappHeadless,
     args,
+    protocolTimeout: env.whatsappProtocolTimeoutMs,
   };
 
   if (env.whatsappBrowserExecutablePath) {
@@ -55,6 +60,49 @@ const buildClient = () => new Client({
   }),
   puppeteer: buildPuppeteerOptions(),
 });
+
+const cleanupStaleSessionArtifacts = async () => {
+  const candidatePaths = [
+    path.join(env.whatsappSessionDir, `session-${env.whatsappClientId}`, 'SingletonLock'),
+    path.join(env.whatsappSessionDir, `session-${env.whatsappClientId}`, 'SingletonCookie'),
+    path.join(env.whatsappSessionDir, `session-${env.whatsappClientId}`, 'SingletonSocket'),
+    path.join(env.whatsappSessionDir, `session-${env.whatsappClientId}`, 'DevToolsActivePort'),
+    path.join(env.whatsappSessionDir, `session-${env.whatsappClientId}`, 'Default', 'LOCK'),
+  ];
+  const removed = [];
+
+  await Promise.all(candidatePaths.map(async (targetPath) => {
+    try {
+      await fs.promises.unlink(targetPath);
+      removed.push(path.relative(env.projectRoot, targetPath));
+    } catch (error) {
+      if (error && error.code === 'ENOENT') return;
+      logger.warn('Falha ao limpar artefato antigo da sessao do WhatsApp.', {
+        path: targetPath,
+        error: error.message,
+      });
+    }
+  }));
+
+  if (removed.length) {
+    logger.info('Artefatos antigos da sessao do WhatsApp foram removidos antes do startup.', {
+      files: removed,
+    });
+  }
+};
+
+const scheduleProcessRestart = (reason) => {
+  if (restartScheduled) return;
+  restartScheduled = true;
+
+  logger.warn('Solicitando reinicio do processo do WhatsApp para recuperacao automatica.', {
+    reason,
+  });
+
+  setTimeout(() => {
+    process.exit(1);
+  }, 250);
+};
 
 const buildHelpMessage = () => (
   [
@@ -259,8 +307,49 @@ module.exports = {
 
     await ensureDir(env.whatsappSessionDir);
     await ensureDir(env.whatsappMediaDir);
+    await cleanupStaleSessionArtifacts();
+    restartScheduled = false;
 
     const client = buildClient();
+    activeClient = client;
+
+    let startupSettled = false;
+    let startupTimeout = null;
+    let authenticatedReadyTimeout = null;
+
+    const clearStartupTimeout = () => {
+      if (!startupTimeout) return;
+      clearTimeout(startupTimeout);
+      startupTimeout = null;
+    };
+
+    const clearAuthenticatedReadyTimeout = () => {
+      if (!authenticatedReadyTimeout) return;
+      clearTimeout(authenticatedReadyTimeout);
+      authenticatedReadyTimeout = null;
+    };
+
+    const finalizeStartupSuccess = () => {
+      if (startupSettled) return false;
+      startupSettled = true;
+      clearStartupTimeout();
+      clearAuthenticatedReadyTimeout();
+      return true;
+    };
+
+    const failStartup = async (error) => {
+      if (startupSettled) return;
+      startupSettled = true;
+      clearStartupTimeout();
+      clearAuthenticatedReadyTimeout();
+
+      if (activeClient === client) {
+        activeClient = null;
+      }
+
+      await client.destroy().catch(() => undefined);
+      throw error;
+    };
 
     client.on('qr', (qr) => {
       logger.info('QR do WhatsApp gerado. Escaneie com o telefone que participa do grupo.', {
@@ -273,6 +362,18 @@ module.exports = {
       logger.info('Sessao do WhatsApp autenticada.', {
         clientId: env.whatsappClientId,
       });
+
+      clearAuthenticatedReadyTimeout();
+      authenticatedReadyTimeout = setTimeout(() => {
+        if (startupSettled) return;
+
+        logger.warn('Sessao autenticada, mas o cliente do WhatsApp nao ficou pronto dentro da tolerancia esperada.', {
+          clientId: env.whatsappClientId,
+          graceMs: AUTHENTICATED_READY_GRACE_MS,
+        });
+
+        scheduleProcessRestart('authenticated_without_ready_timeout');
+      }, AUTHENTICATED_READY_GRACE_MS);
     });
 
     client.on('ready', async () => {
@@ -281,6 +382,7 @@ module.exports = {
         asyncMode: env.receiptAsyncWhatsappMode,
         backendSyncMode: env.receiptBackendSyncMode,
       });
+      finalizeStartupSuccess();
       if (env.receiptAsyncWhatsappMode) {
         logger.warn('Modo assincrono ativo no WhatsApp. O bot vai enfileirar imagens, mas nao respondera no grupo apos o worker concluir.', {
           clientId: env.whatsappClientId,
@@ -298,6 +400,15 @@ module.exports = {
         clientId: env.whatsappClientId,
         details: message,
       });
+      if (!startupSettled) {
+        failStartup(new Error(`Falha de autenticacao no WhatsApp: ${message || 'auth_failure'}`))
+          .catch(() => undefined);
+        return;
+      }
+      if (activeClient === client) {
+        activeClient = null;
+      }
+      scheduleProcessRestart('auth_failure');
     });
 
     client.on('disconnected', (reason) => {
@@ -305,6 +416,15 @@ module.exports = {
         clientId: env.whatsappClientId,
         reason,
       });
+      if (!startupSettled) {
+        failStartup(new Error(`Cliente do WhatsApp desconectou antes do startup concluir: ${reason || 'unknown'}`))
+          .catch(() => undefined);
+        return;
+      }
+      if (activeClient === client) {
+        activeClient = null;
+      }
+      scheduleProcessRestart(`disconnected:${reason || 'unknown'}`);
     });
 
     client.on('message', (message) => {
@@ -320,12 +440,46 @@ module.exports = {
       });
     });
 
-    await client.initialize();
-    activeClient = client;
+    startupTimeout = setTimeout(() => {
+      failStartup(new Error(`Tempo limite de inicializacao do WhatsApp excedido (${STARTUP_TIMEOUT_MS} ms).`))
+        .catch((error) => {
+          logger.error('Falha ao finalizar startup travado do WhatsApp.', {
+            error: error.message,
+          });
+        });
+    }, STARTUP_TIMEOUT_MS);
+
+    try {
+      await client.initialize();
+    } catch (error) {
+      await failStartup(error);
+    }
+
+    if (!startupSettled) {
+      await new Promise((resolve, reject) => {
+        const poll = () => {
+          if (startupSettled) {
+            if (activeClient === client) {
+              resolve();
+              return;
+            }
+
+            reject(new Error('O cliente do WhatsApp falhou durante a inicializacao.'));
+            return;
+          }
+
+          setTimeout(poll, 250);
+        };
+
+        poll();
+      });
+    }
+
     return client;
   },
 
   async stop() {
+    restartScheduled = false;
     if (!activeClient) return;
 
     const currentClient = activeClient;
