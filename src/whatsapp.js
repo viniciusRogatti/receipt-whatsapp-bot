@@ -34,5 +34,5 @@ whatsappRuntimeService.start().catch(async (error) => {
     error: error.message,
   });
   await shutdown('startup_error');
-  process.exitCode = 1;
+  process.exit(1);
 });
