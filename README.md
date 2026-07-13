@@ -341,6 +341,29 @@ Ele permite:
 npm run api
 ```
 
+### 9. Conectar o WhatsApp pelo navegador
+
+Para autenticar com QR code no navegador, use:
+
+```bash
+npm run whatsapp:connect
+```
+
+Esse comando abre o WhatsApp Web com `WHATSAPP_HEADLESS=false`, o que deixa o QR completo na janela do navegador e mantem o bot online apos a leitura.
+
+Se a sessao desconectou e voce precisa forcar um novo QR, use:
+
+```bash
+npm run whatsapp:reconnect
+```
+
+Esse comando limpa a sessao local anterior e abre novamente o WhatsApp Web para um novo pareamento.
+
+Observacao:
+
+- `npm run whatsapp` continua disponivel para subir o runner diretamente
+- `npm run whatsapp:login` agora usa o fluxo visual no navegador por padrao
+
 API padrao:
 
 - `http://localhost:3390/health`
