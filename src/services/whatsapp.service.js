@@ -6,25 +6,15 @@ const {
 
 const normalizeMessageText = (value) => String(value || '').trim();
 
-const getExpectedInvoiceLengths = () => {
-  const parsed = Array.isArray(env.ocrExpectedNfLengths)
-    ? env.ocrExpectedNfLengths
-      .map((value) => Number(value))
-      .filter((value) => Number.isFinite(value) && value > 0)
-      .map((value) => Math.trunc(value))
-    : [];
-
-  return parsed.length ? parsed : [7];
-};
-
 const hasPotentialInvoiceNumberInText = (value) => {
   const messageText = normalizeMessageText(value);
   if (!messageText) return false;
 
-  const expectedLengths = new Set(getExpectedInvoiceLengths());
   const digitGroups = messageText.match(/\d+/g) || [];
-
-  return digitGroups.some((digits) => expectedLengths.has(String(digits || '').length));
+  return digitGroups.some((digits) => {
+    const length = String(digits || '').length;
+    return length >= 3 && length <= 12;
+  });
 };
 
 const buildMessageMetadata = (message = {}) => {
@@ -64,6 +54,8 @@ const buildMessageMetadata = (message = {}) => {
 };
 
 module.exports = {
+  hasPotentialInvoiceNumberInText,
+
   async handleIncomingTextMessage({ message, reply }) {
     const messageMetadata = buildMessageMetadata(message);
 
