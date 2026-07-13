@@ -341,30 +341,13 @@ Ele permite:
 npm run api
 ```
 
-### 9. Conectar o WhatsApp pelo navegador local
+### 9. Recuperar a conexao do WhatsApp na VPS
 
-Para autenticar com QR code no navegador, use:
+Em producao, use o botao de recuperacao na pagina de Horarios. O backend reinicia o servico na VPS e tenta reaproveitar a sessao existente.
 
-```bash
-npm run whatsapp:connect
-```
+Se um novo pareamento for necessario, uma pagina protegida exibe o QR gerado pela propria sessao da VPS. Leia o QR pelo menu de aparelhos conectados do WhatsApp e aguarde o estado chegar a `ready`. Depois disso, a pagina pode ser fechada e o computador do operador pode ser desligado sem interromper o bot.
 
-Esse comando abre o WhatsApp Web com `WHATSAPP_HEADLESS=false` e autentica a sessao armazenada nesta mesma maquina. Ele e indicado para desenvolvimento e diagnostico local; executa-lo no computador do operador nao autentica a instancia da VPS.
-
-Em producao, use o botao de recuperacao na pagina de Horarios. O backend reinicia o servico na VPS e, somente quando um novo pareamento for necessario, a pagina protegida exibe o QR gerado pela propria sessao remota. Depois que o estado chegar a `ready`, a pagina pode ser fechada sem interromper o bot.
-
-Se a sessao desconectou e voce precisa forcar um novo QR, use:
-
-```bash
-npm run whatsapp:reconnect
-```
-
-Esse comando limpa a sessao local anterior e abre novamente o WhatsApp Web para um novo pareamento.
-
-Observacao:
-
-- `npm run whatsapp` continua disponivel para subir o runner diretamente
-- `npm run whatsapp:login` e `npm run whatsapp:connect:local` usam o fluxo visual local
+O comando `npm run whatsapp` permanece disponivel para o `systemd` executar o runner na VPS, mas nao existe fluxo de autenticacao local para operacao em producao.
 
 API padrao:
 
