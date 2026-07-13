@@ -29,5 +29,6 @@ if [ "$RESET_SESSION" -eq 1 ]; then
   echo "Sessao antiga removida: $SESSION_DIR"
 fi
 
-echo "Abrindo o WhatsApp no navegador para autenticacao..."
+echo "Abrindo uma sessao LOCAL do bot no navegador..."
+echo "Este comando nao autentica automaticamente a instancia executada em outra maquina ou VPS."
 exec env WHATSAPP_HEADLESS=false node src/whatsapp.js

@@ -17,6 +17,7 @@ const testModules = [
   require('./unit/backendSyncPayloadAdapter.test'),
   require('./unit/apiService.test'),
   require('./unit/whatsappRuntimeSupport.test'),
+  require('./unit/whatsappConnectionState.test'),
   require('./unit/fileJobQueue.test'),
   require('./unit/documentFieldParser.test'),
   require('./unit/documentExtractionOrchestrator.test'),

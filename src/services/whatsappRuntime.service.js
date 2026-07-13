@@ -6,6 +6,7 @@ const env = require('../config/env');
 const logger = require('../utils/logger');
 const { ensureDir } = require('../utils/file');
 const whatsappService = require('./whatsapp.service');
+const whatsappConnectionStateService = require('./whatsappConnectionState.service');
 const {
   isGroupAllowed,
   isGroupMessage,
@@ -306,6 +307,10 @@ module.exports = {
     await ensureDir(env.whatsappSessionDir);
     await cleanupStaleSessionArtifacts();
     restartScheduled = false;
+    await whatsappConnectionStateService.writeConnectionState('starting')
+      .catch((error) => logger.warn('Falha ao registrar inicio da conexao do WhatsApp.', {
+        error: error.message,
+      }));
 
     const client = buildClient();
     activeClient = client;
@@ -352,6 +357,10 @@ module.exports = {
       logger.info('QR do WhatsApp gerado. Escaneie com o telefone que participa do grupo.', {
         clientId: env.whatsappClientId,
       });
+      whatsappConnectionStateService.writeConnectionState('qr_required', { qr })
+        .catch((error) => logger.warn('Falha ao registrar QR do WhatsApp para recuperacao web.', {
+          error: error.message,
+        }));
       qrcodeTerminal.generate(qr, { small: true });
     });
 
@@ -359,6 +368,10 @@ module.exports = {
       logger.info('Sessao do WhatsApp autenticada.', {
         clientId: env.whatsappClientId,
       });
+      whatsappConnectionStateService.writeConnectionState('authenticated')
+        .catch((error) => logger.warn('Falha ao registrar autenticacao do WhatsApp.', {
+          error: error.message,
+        }));
 
       clearAuthenticatedReadyTimeout();
       authenticatedReadyTimeout = setTimeout(() => {
@@ -379,6 +392,10 @@ module.exports = {
         asyncMode: env.receiptAsyncWhatsappMode,
         backendSyncMode: env.receiptBackendSyncMode,
       });
+      await whatsappConnectionStateService.writeConnectionState('ready')
+        .catch((error) => logger.warn('Falha ao registrar prontidao do WhatsApp.', {
+          error: error.message,
+        }));
       finalizeStartupSuccess();
       if (env.receiptAsyncWhatsappMode) {
         logger.warn('Modo assincrono ativo no WhatsApp. O bot vai enfileirar imagens, mas nao respondera no grupo apos o worker concluir.', {
@@ -397,6 +414,10 @@ module.exports = {
         clientId: env.whatsappClientId,
         details: message,
       });
+      whatsappConnectionStateService.writeConnectionState('auth_failure', {
+        message,
+        reason: 'auth_failure',
+      }).catch(() => undefined);
       if (!startupSettled) {
         failStartup(new Error(`Falha de autenticacao no WhatsApp: ${message || 'auth_failure'}`))
           .catch(() => undefined);
@@ -413,6 +434,8 @@ module.exports = {
         clientId: env.whatsappClientId,
         reason,
       });
+      whatsappConnectionStateService.writeConnectionState('disconnected', { reason })
+        .catch(() => undefined);
       if (!startupSettled) {
         failStartup(new Error(`Cliente do WhatsApp desconectou antes do startup concluir: ${reason || 'unknown'}`))
           .catch(() => undefined);
@@ -449,6 +472,10 @@ module.exports = {
     try {
       await client.initialize();
     } catch (error) {
+      await whatsappConnectionStateService.writeConnectionState('error', {
+        message: error.message,
+        reason: 'initialization_failure',
+      }).catch(() => undefined);
       await failStartup(error);
     }
 
@@ -477,10 +504,14 @@ module.exports = {
 
   async stop() {
     restartScheduled = false;
-    if (!activeClient) return;
+    if (!activeClient) {
+      await whatsappConnectionStateService.writeConnectionState('stopped').catch(() => undefined);
+      return;
+    }
 
     const currentClient = activeClient;
     activeClient = null;
     await currentClient.destroy().catch(() => undefined);
+    await whatsappConnectionStateService.writeConnectionState('stopped').catch(() => undefined);
   },
 };

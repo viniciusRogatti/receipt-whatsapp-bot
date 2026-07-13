@@ -13,6 +13,7 @@
     "whatsapp:login": "bash ./scripts/whatsapp-connect-web.sh",
     "whatsapp:login:web": "bash ./scripts/whatsapp-connect-web.sh",
     "whatsapp:connect": "bash ./scripts/whatsapp-connect-web.sh",
+    "whatsapp:connect:local": "bash ./scripts/whatsapp-connect-web.sh",
     "whatsapp:reconnect": "bash ./scripts/whatsapp-connect-web.sh --reset-session",
     "worker": "node src/worker.js",
     "worker:once": "node src/worker.js --once",

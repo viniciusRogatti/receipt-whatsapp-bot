@@ -232,6 +232,10 @@ const env = {
   receiptLocalReportOnly: parseBoolean(process.env.RECEIPT_LOCAL_REPORT_ONLY, true),
   receiptLocalMaxImages: Math.max(0, Number(process.env.RECEIPT_LOCAL_MAX_IMAGES || 0)),
   whatsappSessionDir: resolvePath(process.env.WHATSAPP_SESSION_DIR, './outputs/whatsapp-session'),
+  whatsappConnectionStatePath: resolvePath(
+    process.env.WHATSAPP_CONNECTION_STATE_PATH,
+    './outputs/whatsapp-connection-state.json',
+  ),
   whatsappMediaDir: resolvePath(process.env.WHATSAPP_MEDIA_DIR, './outputs/whatsapp-media'),
   whatsappClientId: String(process.env.WHATSAPP_CLIENT_ID || 'receipt-whatsapp-bot').trim(),
   whatsappHeadless: parseBoolean(process.env.WHATSAPP_HEADLESS, true),
