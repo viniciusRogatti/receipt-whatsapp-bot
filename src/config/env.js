@@ -76,7 +76,7 @@ const resolvedReceiptProfile = getReceiptProfileById(configuredReceiptProfileId)
   || getReceiptProfileById(DEFAULT_RECEIPT_PROFILE_ID);
 const DEFAULT_WHATSAPP_GROUP_POLICIES = {
   'kp - canhotos': {
-    processingMode: 'ocr',
+    processingMode: 'caption_only',
     companyCode: 'mar_e_rio',
     companyName: 'MAR E RIO',
   },

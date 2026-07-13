@@ -1,50 +1,31 @@
-const path = require('path');
 const env = require('../config/env');
-const receiptProfile = require('../config/receiptProfile');
-const {
-  RECEIPT_FIELD_KEYS,
-} = require('../config/receiptProfiles');
-const receiptAnalysisService = require('./receiptAnalysis.service');
 const apiService = require('./api.service');
-const receiptIngestionService = require('./ingestion/receiptIngestion.service');
 const {
   resolveWhatsappGroupPolicy,
 } = require('./whatsappRuntimeSupport.service');
 
-const issuerHeaderLabel = receiptProfile.fieldSpecs[RECEIPT_FIELD_KEYS.issuerHeader].label;
+const normalizeMessageText = (value) => String(value || '').trim();
 
-const buildReplyMessage = (analysis) => {
-  if (!analysis || !analysis.classification) return 'Nao foi possivel analisar a imagem enviada.';
-  const reasons = analysis.classification.reasons || [];
+const getExpectedInvoiceLengths = () => {
+  const parsed = Array.isArray(env.ocrExpectedNfLengths)
+    ? env.ocrExpectedNfLengths
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .map((value) => Math.trunc(value))
+    : [];
 
-  if (analysis.classification.classification === 'valid') {
-    return null;
-  }
-
-  if (reasons.some((reason) => reason.includes('Fundo muito claro'))) {
-    return 'Fundo muito claro. Por favor, coloque o canhoto sobre uma superficie escura e envie outra foto.';
-  }
-
-  if (analysis.classification.classification === 'review') {
-    if (reasons.some((reason) => reason.includes('DATA DE RECEBIMENTO'))) {
-      return 'Nao consegui confirmar a DATA DE RECEBIMENTO. Reenvie uma foto mais nitida dessa parte do canhoto.';
-    }
-
-    if (reasons.some((reason) => reason.includes('Campo NF-e'))) {
-      return 'Nao consegui confirmar o bloco NF-e. Reenvie uma foto mais centralizada e sem cortes.';
-    }
-
-    return 'Nao consegui validar o canhoto com seguranca. Reenvie uma foto mais nitida e centralizada.';
-  }
-
-  return `A imagem nao trouxe os campos minimos do canhoto. Reenvie uma foto com DATA DE RECEBIMENTO, ${issuerHeaderLabel} e NF-e visiveis.`;
+  return parsed.length ? parsed : [7];
 };
 
-const buildOperationalFailureReplyMessage = () => (
-  'Consegui ler a imagem, mas nao consegui registrar o resultado no sistema agora. Tente novamente em instantes.'
-);
+const hasPotentialInvoiceNumberInText = (value) => {
+  const messageText = normalizeMessageText(value);
+  if (!messageText) return false;
 
-const normalizeMessageText = (value) => String(value || '').trim();
+  const expectedLengths = new Set(getExpectedInvoiceLengths());
+  const digitGroups = messageText.match(/\d+/g) || [];
+
+  return digitGroups.some((digits) => expectedLengths.has(String(digits || '').length));
+};
 
 const buildMessageMetadata = (message = {}) => {
   const messageText = normalizeMessageText(
@@ -75,7 +56,7 @@ const buildMessageMetadata = (message = {}) => {
     messageText: messageText || null,
     caption: messageText || null,
     body: messageText || null,
-    whatsappProcessingMode: groupPolicy.processingMode || 'ocr',
+    whatsappProcessingMode: groupPolicy.processingMode || 'caption_only',
     expectedCompanyCode: groupPolicy.companyCode || null,
     expectedCompanyId: groupPolicy.companyId || null,
     expectedCompanyName: groupPolicy.companyName || null,
@@ -83,163 +64,33 @@ const buildMessageMetadata = (message = {}) => {
 };
 
 module.exports = {
-  buildReplyMessage,
+  async handleIncomingTextMessage({ message, reply }) {
+    const messageMetadata = buildMessageMetadata(message);
 
-  async downloadMedia(message, downloader) {
-    if (typeof downloader !== 'function') {
-      throw new Error('downloadMedia requer um downloader injetado para integracao real com WhatsApp.');
-    }
-
-    return downloader(message);
-  },
-
-  async handleIncomingImageMessage({ message, mediaPath, reply, outputDir }) {
-    try {
-      const messageMetadata = buildMessageMetadata(message);
-
-      if (messageMetadata.whatsappProcessingMode === 'caption_only') {
-        const backendSync = await apiService.syncWhatsappTextReceipt({
-          imagePath: mediaPath,
-          metadata: messageMetadata,
-        });
-
-        let replyMessage = null;
-        if (
-          backendSync
-          && backendSync.action === 'create_receipt_alert'
-          && env.whatsappReplyOnOperationalFailure
-        ) {
-          replyMessage = backendSync.replyMessage || null;
-        }
-
-        let replied = false;
-        if (replyMessage && typeof reply === 'function') {
-          replied = !!(await reply(replyMessage, message));
-        }
-
-        return {
-          analysis: null,
-          backendSync,
-          backendSyncError: null,
-          replied,
-          replyMessage,
-        };
-      }
-
-      if (env.receiptAsyncWhatsappMode) {
-        const ingestResult = await receiptIngestionService.ingestReceipt({
-          payload: {
-            companyId: message && message.companyId ? message.companyId : undefined,
-            documentType: 'delivery_receipt',
-            metadata: {
-              groupId: message && message.groupId ? message.groupId : null,
-              groupName: message && message.groupName ? message.groupName : null,
-              chatId: message && message.chatId ? message.chatId : null,
-              messageId: message && message.id ? message.id : null,
-              mediaId: message && message.mediaId ? message.mediaId : null,
-              sender: message && message.sender ? message.sender : null,
-              senderId: message && message.senderId ? message.senderId : null,
-              senderPhone: message && message.senderPhone ? message.senderPhone : null,
-              senderName: message && message.senderName ? message.senderName : null,
-              senderContactName: message && message.senderContactName ? message.senderContactName : null,
-              messageTimestamp: message && message.timestamp ? message.timestamp : null,
-              messageText: messageMetadata.messageText || null,
-              caption: messageMetadata.caption || null,
-              body: messageMetadata.body || null,
-              source: 'whatsapp',
-              sourceName: 'whatsapp',
-            },
-          },
-          headers: {},
-          uploadedFile: {
-            path: mediaPath,
-            originalName: path.basename(mediaPath || 'receipt.jpg'),
-          },
-          sourceHint: 'whatsapp',
-        });
-
-        return {
-          queued: true,
-          replied: false,
-          replyMessage: null,
-          ingestion: ingestResult,
-        };
-      }
-
-      const analysis = await receiptAnalysisService.analyzeImage({
-        imagePath: mediaPath,
-        outputDir: outputDir || path.join(process.cwd(), 'outputs', 'whatsapp'),
-      });
-      let backendSync = null;
-      let backendSyncError = null;
-
-      try {
-        backendSync = await apiService.syncAnalysisResult(analysis, {
-          imagePath: mediaPath,
-          metadata: messageMetadata,
-        });
-      } catch (error) {
-        backendSyncError = error;
-
-        await apiService.createWhatsappOperationalAlert({
-          code: 'RECEIPT_WHATSAPP_SYNC_FAILURE',
-          title: 'Falha ao sincronizar canhoto vindo do WhatsApp',
-          message: `O bot leu a imagem recebida em ${messageMetadata.groupName || messageMetadata.groupId || 'grupo desconhecido'}, mas nao conseguiu atualizar o backend.`,
-          severity: 'CRITICAL',
-          invoiceNumber: analysis && analysis.nfExtraction ? analysis.nfExtraction.nf : null,
-          metadata: Object.assign({}, messageMetadata, {
-            backendAction: 'mark_invoice_delivered',
-            backendMode: env.receiptBackendSyncMode,
-            classification: analysis && analysis.classification ? analysis.classification.classification : null,
-            reasons: analysis && analysis.classification && Array.isArray(analysis.classification.reasons)
-              ? analysis.classification.reasons
-              : [],
-            errorMessage: error.message,
-          }),
-        }).catch(() => undefined);
-      }
-
-      let replyMessage = buildReplyMessage(analysis);
-      if (
-        !replyMessage
-        && backendSyncError
-        && env.whatsappReplyOnOperationalFailure
-      ) {
-        replyMessage = buildOperationalFailureReplyMessage();
-      }
-
-      let replied = false;
-      if (replyMessage && typeof reply === 'function') {
-        replied = !!(await reply(replyMessage, message));
-      }
-
+    if (!hasPotentialInvoiceNumberInText(messageMetadata.messageText)) {
       return {
-        analysis,
-        backendSync,
-        backendSyncError: backendSyncError
-          ? {
-            message: backendSyncError.message,
-          }
-          : null,
-        replied,
-        replyMessage,
+        ignored: true,
+        reason: 'no_invoice_candidate_in_text',
       };
-    } catch (error) {
-      const messageMetadata = buildMessageMetadata(message);
-
-      await apiService.createWhatsappOperationalAlert({
-        code: 'RECEIPT_WHATSAPP_PROCESSING_FAILURE',
-        title: 'Falha ao processar imagem vinda do WhatsApp',
-        message: `O bot nao conseguiu concluir o processamento da imagem recebida em ${messageMetadata.groupName || messageMetadata.groupId || 'grupo desconhecido'}.`,
-        severity: 'WARNING',
-        metadata: Object.assign({}, messageMetadata, {
-          backendAction: 'process_receipt_image',
-          backendMode: env.receiptBackendSyncMode,
-          errorMessage: error.message,
-        }),
-      }).catch(() => undefined);
-
-      throw error;
     }
+
+    const backendSync = await apiService.syncWhatsappTextReceipt({
+      imagePath: null,
+      metadata: messageMetadata,
+    });
+
+    let replied = false;
+    const replyMessage = backendSync && backendSync.replyMessage ? backendSync.replyMessage : null;
+    if (replyMessage && typeof reply === 'function') {
+      replied = !!(await reply(replyMessage, message));
+    }
+
+    return {
+      backendSync,
+      backendSyncError: null,
+      replied,
+      replyMessage,
+      ignored: false,
+    };
   },
 };

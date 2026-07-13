@@ -4,14 +4,13 @@ const qrcodeTerminal = require('qrcode-terminal');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const env = require('../config/env');
 const logger = require('../utils/logger');
-const { ensureDir, removeFile } = require('../utils/file');
+const { ensureDir } = require('../utils/file');
 const whatsappService = require('./whatsapp.service');
 const {
   isGroupAllowed,
   isGroupMessage,
-  isImageMimeType,
   parseTextCommand,
-  resolveMediaFileName,
+  resolveWhatsappGroupPolicy,
 } = require('./whatsappRuntimeSupport.service');
 
 let activeClient = null;
@@ -23,14 +22,6 @@ const AUTHENTICATED_READY_GRACE_MS = 30000;
 const extractPhoneDigits = (value) => {
   const match = String(value || '').match(/^(\d+)(?:@|$)/);
   return match ? match[1] : null;
-};
-
-const sanitizeSegment = (value, fallback = 'group') => {
-  const normalized = String(value || '')
-    .replace(/[^a-zA-Z0-9_-]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-
-  return normalized || fallback;
 };
 
 const normalizeMessageText = (value) => String(value || '').trim();
@@ -114,8 +105,8 @@ const buildHelpMessage = () => (
 
 const buildStatusMessage = () => (
   env.receiptAsyncWhatsappMode
-    ? 'Bot online. O modo assincrono esta ativo e as imagens novas serao apenas enfileiradas.'
-    : `Bot online. O modo atual processa imagens novas e sincroniza o backend em modo ${env.receiptBackendSyncMode}.`
+    ? 'Bot online. O modo assincrono esta ativo e as mensagens novas serao apenas enfileiradas.'
+    : `Bot online. O modo atual processa mensagens novas e sincroniza o backend em modo ${env.receiptBackendSyncMode}.`
 );
 
 const replyIfEnabled = async (message, text) => {
@@ -177,6 +168,11 @@ const buildMessageContext = async (message, chat) => {
     ? String(contact.pushname)
     : (message._data && message._data.notifyName ? String(message._data.notifyName) : null);
   const sender = senderContactName || senderName || senderPhone || senderId || null;
+  const groupPolicy = resolveWhatsappGroupPolicy({
+    groupId: message.from,
+    groupName: chat && chat.name ? chat.name : null,
+    groupPolicies: env.whatsappGroupPolicies,
+  });
 
   return {
     id: message.id && message.id._serialized ? message.id._serialized : String(message.id || ''),
@@ -194,22 +190,11 @@ const buildMessageContext = async (message, chat) => {
     messageText: messageText || null,
     caption: messageText || null,
     body: messageText || null,
+    whatsappProcessingMode: groupPolicy.processingMode || 'caption_only',
+    expectedCompanyCode: groupPolicy.companyCode || null,
+    expectedCompanyId: groupPolicy.companyId || null,
+    expectedCompanyName: groupPolicy.companyName || null,
   };
-};
-
-const downloadImageToDisk = async (messageContext, media) => {
-  const fileName = resolveMediaFileName({
-    mimeType: media.mimetype,
-    originalFileName: media.filename || '',
-    messageId: messageContext.id,
-  });
-  const groupSegment = sanitizeSegment(messageContext.groupName || messageContext.groupId, 'group');
-  const targetDir = path.join(env.whatsappMediaDir, groupSegment);
-  const targetPath = path.join(targetDir, `${Date.now()}-${fileName}`);
-
-  await ensureDir(targetDir);
-  await fs.promises.writeFile(targetPath, Buffer.from(media.data, 'base64'));
-  return targetPath;
 };
 
 const handleTextCommand = async (message) => {
@@ -232,45 +217,55 @@ const handleTextCommand = async (message) => {
 };
 
 const handleIncomingMedia = async (message, chat) => {
-  const media = await whatsappService.downloadMedia(message, async (sourceMessage) => sourceMessage.downloadMedia());
-  if (!media || !media.data || !isImageMimeType(media.mimetype)) {
-    logger.debug('Midia ignorada por nao ser imagem.', {
-      chatId: message.from,
-      mimetype: media ? media.mimetype : null,
+  const messageContext = await buildMessageContext(message, chat);
+  const result = await whatsappService.handleIncomingTextMessage({
+    message: messageContext,
+    reply: async (text) => replyIfEnabled(message, text),
+  });
+
+  if (result && result.ignored) {
+    logger.debug('Midia ignorada porque o texto/caption nao trouxe NF candidata.', {
+      chatId: messageContext.chatId,
+      groupName: messageContext.groupName,
+      messageId: messageContext.id,
     });
     return;
   }
 
+  logger.info('Mensagem com midia processada em modo texto no WhatsApp.', {
+    chatId: messageContext.chatId,
+    groupName: messageContext.groupName,
+    messageId: messageContext.id,
+    backendAction: result && result.backendSync ? result.backendSync.action : null,
+    backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
+    replied: result ? result.replied : false,
+  });
+};
+
+const handleIncomingText = async (message, chat) => {
   const messageContext = await buildMessageContext(message, chat);
-  const mediaPath = await downloadImageToDisk(messageContext, media);
+  const result = await whatsappService.handleIncomingTextMessage({
+    message: messageContext,
+    reply: async (text) => replyIfEnabled(message, text),
+  });
 
-  try {
-    const result = await whatsappService.handleIncomingImageMessage({
-      message: messageContext,
-      mediaPath,
-      reply: async (text) => replyIfEnabled(message, text),
-      outputDir: path.join(process.cwd(), 'outputs', 'whatsapp', sanitizeSegment(messageContext.groupId, 'group')),
+  if (result && result.ignored) {
+    logger.debug('Mensagem de texto ignorada por nao conter NF candidata.', {
+      chatId: messageContext.chatId,
+      groupName: messageContext.groupName,
+      messageId: messageContext.id,
     });
-
-      logger.info('Mensagem de imagem processada no WhatsApp.', {
-        chatId: messageContext.chatId,
-        groupName: messageContext.groupName,
-        messageId: messageContext.id,
-        jobId: result.ingestion ? result.ingestion.jobId || null : null,
-        invoiceNumber: result.analysis && result.analysis.nfExtraction
-          ? result.analysis.nfExtraction.nf || null
-          : null,
-        classification: result.analysis && result.analysis.classification
-          ? result.analysis.classification.classification
-          : null,
-      replied: result.replied,
-      backendAction: result.backendSync ? result.backendSync.action : null,
-      backendSyncError: result.backendSyncError ? result.backendSyncError.message : null,
-      queued: !!result.queued,
-    });
-  } finally {
-    await removeFile(mediaPath);
+    return;
   }
+
+  logger.info('Mensagem de texto processada no WhatsApp.', {
+    chatId: messageContext.chatId,
+    groupName: messageContext.groupName,
+    messageId: messageContext.id,
+    backendAction: result && result.backendSync ? result.backendSync.action : null,
+    backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
+    replied: result ? result.replied : false,
+  });
 };
 
 const handleMessage = async (message) => {
@@ -298,7 +293,10 @@ const handleMessage = async (message) => {
     return;
   }
 
-  await handleTextCommand(message);
+  const commandHandled = await handleTextCommand(message);
+  if (commandHandled) return;
+
+  await handleIncomingText(message, chat);
 };
 
 module.exports = {
@@ -306,7 +304,6 @@ module.exports = {
     if (activeClient) return activeClient;
 
     await ensureDir(env.whatsappSessionDir);
-    await ensureDir(env.whatsappMediaDir);
     await cleanupStaleSessionArtifacts();
     restartScheduled = false;
 

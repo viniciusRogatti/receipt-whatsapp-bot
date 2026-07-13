@@ -97,7 +97,7 @@ const resolveWhatsappGroupPolicy = ({
   if (!matchedEntry) {
     return {
       key: normalizedName || normalizedId || null,
-      processingMode: 'ocr',
+      processingMode: 'caption_only',
       companyCode: null,
       companyId: null,
       companyName: null,
@@ -111,7 +111,7 @@ const resolveWhatsappGroupPolicy = ({
 
   return {
     key: normalizeGroupPolicyKey(matchedEntry[0]) || normalizedName || normalizedId || null,
-    processingMode: normalizeText(normalizedPolicy.processingMode || normalizedPolicy.mode).toLowerCase() || 'ocr',
+    processingMode: normalizeText(normalizedPolicy.processingMode || normalizedPolicy.mode).toLowerCase() || 'caption_only',
     companyCode: normalizeText(normalizedPolicy.companyCode) || null,
     companyId: normalizeText(normalizedPolicy.companyId) || null,
     companyName: normalizeText(normalizedPolicy.companyName) || null,
