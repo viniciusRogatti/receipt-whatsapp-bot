@@ -20,6 +20,23 @@ module.exports = () => [
     },
   },
   {
+    name: 'whatsappConnectionState inclui telemetria operacional sem expor QR',
+    run: () => {
+      const state = buildConnectionState('ready', {
+        heartbeatAt: '2026-07-15T15:00:00.000Z',
+        whatsappState: 'CONNECTED',
+        lastMessageReceivedAt: '2026-07-15T14:59:00.000Z',
+        lastIgnoredReason: 'group_not_allowed',
+      });
+
+      assert.strictEqual(state.heartbeatAt, '2026-07-15T15:00:00.000Z');
+      assert.strictEqual(state.whatsappState, 'CONNECTED');
+      assert.strictEqual(state.lastMessageReceivedAt, '2026-07-15T14:59:00.000Z');
+      assert.strictEqual(state.lastIgnoredReason, 'group_not_allowed');
+      assert.strictEqual(state.qr, null);
+    },
+  },
+  {
     name: 'whatsappConnectionState rejeita status desconhecido',
     run: () => {
       assert.throws(

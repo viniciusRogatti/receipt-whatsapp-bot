@@ -16,9 +16,65 @@ const {
 
 let activeClient = null;
 let restartScheduled = false;
+let healthcheckTimer = null;
+let healthcheckFailures = 0;
+let stateWritePromise = Promise.resolve();
+
+const runtimeTelemetry = {
+  heartbeatAt: null,
+  whatsappState: null,
+  lastMessageReceivedAt: null,
+  lastMessageProcessedAt: null,
+  lastIgnoredMessageAt: null,
+  lastIgnoredReason: null,
+  lastMessageErrorAt: null,
+  lastMessageError: null,
+};
 
 const STARTUP_TIMEOUT_MS = 600000;
 const AUTHENTICATED_READY_GRACE_MS = 30000;
+
+const nowIso = () => new Date().toISOString();
+
+const persistReadyState = (details = {}) => {
+  Object.assign(runtimeTelemetry, details);
+  stateWritePromise = stateWritePromise
+    .catch(() => undefined)
+    .then(() => whatsappConnectionStateService.writeConnectionState('ready', runtimeTelemetry));
+  return stateWritePromise;
+};
+
+const clearHealthcheck = () => {
+  if (!healthcheckTimer) return;
+  clearInterval(healthcheckTimer);
+  healthcheckTimer = null;
+};
+
+const recordMessageReceived = () => persistReadyState({
+  lastMessageReceivedAt: nowIso(),
+  lastMessageErrorAt: null,
+  lastMessageError: null,
+});
+
+const recordMessageProcessed = () => persistReadyState({
+  lastMessageProcessedAt: nowIso(),
+  lastIgnoredMessageAt: null,
+  lastIgnoredReason: null,
+  lastMessageErrorAt: null,
+  lastMessageError: null,
+});
+
+const recordIgnoredMessage = (reason) => persistReadyState({
+  lastIgnoredMessageAt: nowIso(),
+  lastIgnoredReason: String(reason || 'ignored').trim() || 'ignored',
+  lastMessageErrorAt: null,
+  lastMessageError: null,
+});
+
+const recordMessageError = (error) => persistReadyState({
+  lastMessageErrorAt: nowIso(),
+  lastMessageError: String(error?.message || error || 'unknown_error').trim() || 'unknown_error',
+});
 
 const extractPhoneDigits = (value) => {
   const match = String(value || '').match(/^(\d+)(?:@|$)/);
@@ -86,6 +142,7 @@ const cleanupStaleSessionArtifacts = async () => {
 const scheduleProcessRestart = (reason) => {
   if (restartScheduled) return;
   restartScheduled = true;
+  clearHealthcheck();
 
   logger.warn('Solicitando reinicio do processo do WhatsApp para recuperacao automatica.', {
     reason,
@@ -94,6 +151,56 @@ const scheduleProcessRestart = (reason) => {
   setTimeout(() => {
     process.exit(1);
   }, 250);
+};
+
+const startHealthcheck = (client) => {
+  clearHealthcheck();
+  healthcheckFailures = 0;
+
+  const check = async () => {
+    if (activeClient !== client || restartScheduled) return;
+
+    try {
+      const whatsappState = String(await client.getState() || 'unknown').trim().toUpperCase();
+      healthcheckFailures = 0;
+      await persistReadyState({
+        heartbeatAt: nowIso(),
+        whatsappState,
+      });
+
+      if (whatsappState === 'CONNECTED') return;
+
+      logger.warn('Healthcheck detectou cliente do WhatsApp sem conexao ativa.', {
+        clientId: env.whatsappClientId,
+        whatsappState,
+      });
+      if (activeClient === client) activeClient = null;
+      await whatsappConnectionStateService.writeConnectionState('disconnected', {
+        reason: `healthcheck_${whatsappState.toLowerCase()}`,
+      });
+      scheduleProcessRestart(`healthcheck:${whatsappState}`);
+    } catch (error) {
+      healthcheckFailures += 1;
+      logger.warn('Healthcheck nao conseguiu confirmar o cliente do WhatsApp.', {
+        clientId: env.whatsappClientId,
+        failures: healthcheckFailures,
+        error: error.message,
+      });
+      if (healthcheckFailures < 2) return;
+
+      if (activeClient === client) activeClient = null;
+      await whatsappConnectionStateService.writeConnectionState('error', {
+        reason: 'healthcheck_failed',
+        message: error.message,
+      });
+      scheduleProcessRestart('healthcheck_failed');
+    }
+  };
+
+  check().catch(() => undefined);
+  healthcheckTimer = setInterval(() => {
+    check().catch(() => undefined);
+  }, env.whatsappHealthcheckMs);
 };
 
 const buildHelpMessage = () => (
@@ -230,7 +337,7 @@ const handleIncomingMedia = async (message, chat) => {
       groupName: messageContext.groupName,
       messageId: messageContext.id,
     });
-    return;
+    return result;
   }
 
   logger.info('Mensagem com midia processada em modo texto no WhatsApp.', {
@@ -241,6 +348,7 @@ const handleIncomingMedia = async (message, chat) => {
     backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
     replied: result ? result.replied : false,
   });
+  return result;
 };
 
 const handleIncomingText = async (message, chat) => {
@@ -256,7 +364,7 @@ const handleIncomingText = async (message, chat) => {
       groupName: messageContext.groupName,
       messageId: messageContext.id,
     });
-    return;
+    return result;
   }
 
   logger.info('Mensagem de texto processada no WhatsApp.', {
@@ -267,14 +375,20 @@ const handleIncomingText = async (message, chat) => {
     backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
     replied: result ? result.replied : false,
   });
+  return result;
 };
 
 const handleMessage = async (message) => {
   if (!message || message.fromMe) return;
   if (!isGroupMessage(message.from)) return;
 
+  await recordMessageReceived();
+
   const chat = await message.getChat();
-  if (!chat || !chat.isGroup) return;
+  if (!chat || !chat.isGroup) {
+    await recordIgnoredMessage('chat_not_group');
+    return;
+  }
 
   if (!isGroupAllowed({
     groupId: message.from,
@@ -286,18 +400,26 @@ const handleMessage = async (message) => {
       chatId: message.from,
       groupName: chat.name || null,
     });
+    await recordIgnoredMessage('group_not_allowed');
     return;
   }
 
   if (message.hasMedia) {
-    await handleIncomingMedia(message, chat);
+    const result = await handleIncomingMedia(message, chat);
+    if (result?.ignored) await recordIgnoredMessage(result.reason);
+    else await recordMessageProcessed();
     return;
   }
 
   const commandHandled = await handleTextCommand(message);
-  if (commandHandled) return;
+  if (commandHandled) {
+    await recordMessageProcessed();
+    return;
+  }
 
-  await handleIncomingText(message, chat);
+  const result = await handleIncomingText(message, chat);
+  if (result?.ignored) await recordIgnoredMessage(result.reason);
+  else await recordMessageProcessed();
 };
 
 module.exports = {
@@ -307,6 +429,17 @@ module.exports = {
     await ensureDir(env.whatsappSessionDir);
     await cleanupStaleSessionArtifacts();
     restartScheduled = false;
+    clearHealthcheck();
+    Object.assign(runtimeTelemetry, {
+      heartbeatAt: null,
+      whatsappState: null,
+      lastMessageReceivedAt: null,
+      lastMessageProcessedAt: null,
+      lastIgnoredMessageAt: null,
+      lastIgnoredReason: null,
+      lastMessageErrorAt: null,
+      lastMessageError: null,
+    });
     await whatsappConnectionStateService.writeConnectionState('starting')
       .catch((error) => logger.warn('Falha ao registrar inicio da conexao do WhatsApp.', {
         error: error.message,
@@ -392,11 +525,15 @@ module.exports = {
         asyncMode: env.receiptAsyncWhatsappMode,
         backendSyncMode: env.receiptBackendSyncMode,
       });
-      await whatsappConnectionStateService.writeConnectionState('ready')
+      await persistReadyState({
+        heartbeatAt: nowIso(),
+        whatsappState: 'CONNECTED',
+      })
         .catch((error) => logger.warn('Falha ao registrar prontidao do WhatsApp.', {
           error: error.message,
         }));
       finalizeStartupSuccess();
+      startHealthcheck(client);
       if (env.receiptAsyncWhatsappMode) {
         logger.warn('Modo assincrono ativo no WhatsApp. O bot vai enfileirar imagens, mas nao respondera no grupo apos o worker concluir.', {
           clientId: env.whatsappClientId,
@@ -410,6 +547,7 @@ module.exports = {
     });
 
     client.on('auth_failure', (message) => {
+      clearHealthcheck();
       logger.error('Falha de autenticacao no WhatsApp.', {
         clientId: env.whatsappClientId,
         details: message,
@@ -430,6 +568,7 @@ module.exports = {
     });
 
     client.on('disconnected', (reason) => {
+      clearHealthcheck();
       logger.warn('Cliente do WhatsApp desconectado.', {
         clientId: env.whatsappClientId,
         reason,
@@ -449,6 +588,7 @@ module.exports = {
 
     client.on('message', (message) => {
       handleMessage(message).catch(async (error) => {
+        await recordMessageError(error).catch(() => undefined);
         logger.error('Falha ao processar mensagem recebida no WhatsApp.', {
           error: error.message,
           chatId: message && message.from ? message.from : null,
@@ -504,6 +644,7 @@ module.exports = {
 
   async stop() {
     restartScheduled = false;
+    clearHealthcheck();
     if (!activeClient) {
       await whatsappConnectionStateService.writeConnectionState('stopped').catch(() => undefined);
       return;

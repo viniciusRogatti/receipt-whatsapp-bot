@@ -240,6 +240,7 @@ const env = {
   whatsappClientId: String(process.env.WHATSAPP_CLIENT_ID || 'receipt-whatsapp-bot').trim(),
   whatsappHeadless: parseBoolean(process.env.WHATSAPP_HEADLESS, true),
   whatsappProtocolTimeoutMs: Math.max(30_000, Number(process.env.WHATSAPP_PROTOCOL_TIMEOUT_MS || 600_000)),
+  whatsappHealthcheckMs: Math.max(15_000, Number(process.env.WHATSAPP_HEALTHCHECK_MS || 30_000)),
   whatsappBrowserExecutablePath: resolveOptionalPath(process.env.WHATSAPP_BROWSER_EXECUTABLE_PATH),
   whatsappBrowserArgs: parseCsvList(process.env.WHATSAPP_BROWSER_ARGS, []),
   whatsappAllowedGroupIds: parseCsvList(process.env.WHATSAPP_ALLOWED_GROUP_IDS, []),

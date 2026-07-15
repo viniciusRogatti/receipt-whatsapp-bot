@@ -32,6 +32,14 @@ const buildConnectionState = (status, details = {}) => {
     clientId: env.whatsappClientId,
     processId: process.pid,
     updatedAt: new Date().toISOString(),
+    heartbeatAt: normalizeOptionalText(details.heartbeatAt),
+    whatsappState: normalizeOptionalText(details.whatsappState),
+    lastMessageReceivedAt: normalizeOptionalText(details.lastMessageReceivedAt),
+    lastMessageProcessedAt: normalizeOptionalText(details.lastMessageProcessedAt),
+    lastIgnoredMessageAt: normalizeOptionalText(details.lastIgnoredMessageAt),
+    lastIgnoredReason: normalizeOptionalText(details.lastIgnoredReason),
+    lastMessageErrorAt: normalizeOptionalText(details.lastMessageErrorAt),
+    lastMessageError: normalizeOptionalText(details.lastMessageError),
   };
 };
 
