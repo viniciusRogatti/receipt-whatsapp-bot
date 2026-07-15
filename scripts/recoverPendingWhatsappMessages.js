@@ -14,6 +14,7 @@ const targetDate = String(args.date || new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date())).trim();
 const fetchLimit = Math.max(100, Math.min(2000, Number(args.limit || 1000) || 1000));
+let recoveryClient = null;
 
 const isTargetDate = (timestamp) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -39,6 +40,7 @@ async function main() {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new Error('Use --date=YYYY-MM-DD.');
 
   const client = buildClient();
+  recoveryClient = client;
   const summary = {
     date: targetDate,
     groups: 0,
@@ -117,10 +119,12 @@ async function main() {
   });
 
   await client.destroy().catch(() => undefined);
+  recoveryClient = null;
   console.log(`RECOVERY_SUMMARY:${JSON.stringify(summary)}`);
 }
 
 main().catch(async (error) => {
-  console.error(error.message);
+  console.error(error.stack || error.message);
+  await recoveryClient?.destroy().catch(() => undefined);
   process.exitCode = 1;
 });
