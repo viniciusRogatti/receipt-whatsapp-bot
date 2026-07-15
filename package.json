@@ -38,6 +38,6 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "tesseract.js": "^7.0.0",
-    "whatsapp-web.js": "^1.34.6"
+    "whatsapp-web.js": "^1.34.7"
   }
 }

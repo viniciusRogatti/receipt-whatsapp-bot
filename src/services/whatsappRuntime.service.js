@@ -19,6 +19,7 @@ let restartScheduled = false;
 let healthcheckTimer = null;
 let healthcheckFailures = 0;
 let stateWritePromise = Promise.resolve();
+const groupNamesById = new Map();
 
 const runtimeTelemetry = {
   heartbeatAt: null,
@@ -224,8 +225,6 @@ const replyIfEnabled = async (message, text) => {
 };
 
 const listAvailableGroups = async (client) => {
-  if (!env.whatsappLogGroupsOnReady) return;
-
   const chats = await client.getChats();
   const groups = chats
     .filter((chat) => chat.isGroup)
@@ -233,6 +232,13 @@ const listAvailableGroups = async (client) => {
       id: chat.id && chat.id._serialized ? chat.id._serialized : String(chat.id || ''),
       name: chat.name || null,
     }));
+
+  groupNamesById.clear();
+  groups.forEach((group) => {
+    if (group.id && group.name) groupNamesById.set(group.id, group.name);
+  });
+
+  if (!env.whatsappLogGroupsOnReady) return;
 
   logger.info('Sessao do WhatsApp pronta com os grupos visiveis.', {
     totalGroups: groups.length,
@@ -309,6 +315,7 @@ const resolveMessageGroupName = (message = {}) => normalizeMessageText(
   message.groupName
   || message._data?.chatName
   || message._data?.groupSubject
+  || groupNamesById.get(message.from)
   || message._data?.notifyName
   || '',
 ) || null;
