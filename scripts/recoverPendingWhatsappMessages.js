@@ -41,7 +41,9 @@ const fetchRawMessages = (client, groupId, limit) => client.pupPage.evaluate(asy
   if (!chat) return [];
 
   let messages = chat.msgs.getModelsArray();
-  while (messages.length < fetchCount) {
+  let loadAttempts = 0;
+  while (messages.length < fetchCount && loadAttempts < 100) {
+    loadAttempts += 1;
     let loaded;
     try {
       loaded = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
@@ -49,7 +51,10 @@ const fetchRawMessages = (client, groupId, limit) => client.pupPage.evaluate(asy
       break;
     }
     if (!loaded?.length) break;
-    messages = chat.msgs.getModelsArray();
+    const knownIds = new Set(messages.map((message) => message.id?._serialized || String(message.id || '')));
+    const newMessages = loaded.filter((message) => !knownIds.has(message.id?._serialized || String(message.id || '')));
+    if (!newMessages.length) break;
+    messages = [...newMessages, ...messages];
   }
 
   messages.sort((left, right) => Number(left.t || 0) - Number(right.t || 0));
