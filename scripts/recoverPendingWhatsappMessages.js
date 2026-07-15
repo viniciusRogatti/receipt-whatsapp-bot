@@ -28,11 +28,11 @@ const buildClient = () => new Client({
     clientId: env.whatsappClientId,
     dataPath: env.whatsappSessionDir,
   }),
-  puppeteer: {
+  puppeteer: Object.assign({
     headless: env.whatsappHeadless,
     args: env.whatsappBrowserArgs.length ? env.whatsappBrowserArgs : ['--no-sandbox', '--disable-setuid-sandbox'],
     protocolTimeout: env.whatsappProtocolTimeoutMs,
-  },
+  }, env.whatsappBrowserExecutablePath ? { executablePath: env.whatsappBrowserExecutablePath } : {}),
 });
 
 async function main() {
