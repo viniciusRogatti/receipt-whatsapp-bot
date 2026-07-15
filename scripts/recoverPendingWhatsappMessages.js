@@ -16,6 +16,37 @@ const targetDate = String(args.date || new Intl.DateTimeFormat('en-CA', {
 const fetchLimit = Math.max(100, Math.min(2000, Number(args.limit || 1000) || 1000));
 let recoveryClient = null;
 
+const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const isRecoverablePageError = (error) => /detached Frame|Execution context was destroyed|Cannot find context|Inspected target navigated or closed/i
+  .test(String(error?.message || error || ''));
+
+const evaluateWhatsappPage = async (client, pageFunction, argument) => {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      const page = client.pupPage;
+      if (!page || page.isClosed()) throw new Error('A pagina do WhatsApp foi encerrada durante a recuperacao.');
+      await page.waitForFunction(() => {
+        try {
+          return typeof window.require === 'function'
+            && Boolean(window.require('WAWebCollections')?.Chat);
+        } catch (_error) {
+          return false;
+        }
+      }, { timeout: 30000, polling: 500 });
+      return await page.evaluate(pageFunction, argument);
+    } catch (error) {
+      lastError = error;
+      if (!isRecoverablePageError(error) || attempt === 4) throw error;
+      console.warn(`A pagina do WhatsApp recarregou; retomando a leitura (tentativa ${attempt + 1}/4).`);
+      // eslint-disable-next-line no-await-in-loop
+      await delay(attempt * 1500);
+    }
+  }
+  throw lastError;
+};
+
 const isTargetDate = (timestamp) => new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date(Number(timestamp || 0) * 1000)) === targetDate;
@@ -24,7 +55,7 @@ const messageText = (message) => String(
   message.body || message.caption || '',
 ).trim();
 
-const listRawGroups = (client) => client.pupPage.evaluate(() => window
+const listRawGroups = (client) => evaluateWhatsappPage(client, () => window
   .require('WAWebCollections')
   .Chat
   .getModelsArray()
@@ -34,7 +65,7 @@ const listRawGroups = (client) => client.pupPage.evaluate(() => window
   }))
   .filter((chat) => chat.id.endsWith('@g.us')));
 
-const fetchRawMessages = (client, groupId, limit) => client.pupPage.evaluate(async ({ chatId, fetchCount }) => {
+const fetchRawMessages = (client, groupId, limit) => evaluateWhatsappPage(client, async ({ chatId, fetchCount }) => {
   const chatWid = window.require('WAWebWidFactory').createWid(chatId);
   const chats = window.require('WAWebCollections').Chat;
   const chat = chats.get(chatWid) || (await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid))?.chat;
@@ -100,9 +131,12 @@ async function main() {
   };
 
   await new Promise((resolve, reject) => {
+    let recoveryStarted = false;
     client.on('qr', () => reject(new Error('A sessao do WhatsApp da VPS precisa ser reconectada.')));
     client.on('auth_failure', (message) => reject(new Error(`Falha de autenticacao: ${message}`)));
     client.on('ready', async () => {
+      if (recoveryStarted) return;
+      recoveryStarted = true;
       try {
         const configuredGroupIds = Array.from(new Set([
           ...env.whatsappAllowedGroupIds,
