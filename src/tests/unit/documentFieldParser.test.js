@@ -14,7 +14,7 @@ module.exports = () => {
         });
 
         const parsed = parserService.parseStructuredDocument({
-          providerId: 'google_vision_document_text',
+          providerId: 'openai_receipt_rescue',
           documentProfile: context.documentProfile,
           ocrDocument: {
             fullText: [
@@ -56,7 +56,7 @@ module.exports = () => {
         });
 
         const parsed = parserService.parseStructuredDocument({
-          providerId: 'google_vision_document_text',
+          providerId: 'openai_receipt_rescue',
           documentProfile: context.documentProfile,
           ocrDocument: {
             fullText: [

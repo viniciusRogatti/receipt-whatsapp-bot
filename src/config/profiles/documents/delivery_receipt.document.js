@@ -32,8 +32,8 @@ module.exports = {
     },
   },
   extractionStrategy: {
-    primaryProvider: PROCESSING_ENGINE_IDS.googleVision,
-    fallbackProviders: [PROCESSING_ENGINE_IDS.openAiRescue],
+    primaryProvider: PROCESSING_ENGINE_IDS.openAiRescue,
+    fallbackProviders: [],
     migrationProviders: [PROCESSING_ENGINE_IDS.legacyReceiptAnalysis],
     allowLegacyOnFailure: true,
   },

@@ -37,7 +37,7 @@ module.exports = () => {
           });
 
           await repository.markCompleted('job-state-1', {
-            providerId: 'google_vision_document_text',
+            providerId: 'openai_receipt_rescue',
             resultSummary: {
               classification: 'valid',
             },
@@ -46,7 +46,7 @@ module.exports = () => {
           const stored = await repository.getJob('job-state-1');
 
           assert.strictEqual(stored.status, 'completed');
-          assert.strictEqual(stored.providerId, 'google_vision_document_text');
+          assert.strictEqual(stored.providerId, 'openai_receipt_rescue');
           assert.strictEqual(stored.resultSummary.classification, 'valid');
           assert.ok(Array.isArray(stored.events));
           assert.ok(stored.events.length >= 4);

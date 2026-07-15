@@ -11,7 +11,7 @@ module.exports = () => {
       run: () => {
         const analysis = buildAnalysisFromProcessingResult({
           extraction: {
-            providerId: 'google_vision_document_text',
+            providerId: 'openai_receipt_rescue',
             parsedDocument: {
               fields: {
                 invoiceNumber: {

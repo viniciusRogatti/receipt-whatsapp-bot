@@ -61,7 +61,7 @@ module.exports = {
         const stats = await fs.promises.stat(absolutePath);
         sizeBytes = Number(stats.size || 0) || null;
       } else if (imageUrl) {
-        const remoteAsset = await readRemoteAsset(imageUrl, env.receiptProviderGoogleVisionTimeoutMs);
+        const remoteAsset = await readRemoteAsset(imageUrl, env.receiptRemoteAssetTimeoutMs);
         await fs.promises.writeFile(absolutePath, remoteAsset.buffer);
         sizeBytes = remoteAsset.sizeBytes || remoteAsset.buffer.length;
         contentType = remoteAsset.mimeType;

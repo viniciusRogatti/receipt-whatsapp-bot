@@ -138,6 +138,10 @@ const env = {
   receiptStateTtlHours: Math.max(1, Number(process.env.RECEIPT_STATE_TTL_HOURS || 168)),
   receiptAssetRetentionHours: Math.max(1, Number(process.env.RECEIPT_ASSET_RETENTION_HOURS || 168)),
   receiptTempTtlHours: Math.max(1, Number(process.env.RECEIPT_TEMP_TTL_HOURS || 24)),
+  receiptRemoteAssetTimeoutMs: Math.max(
+    1000,
+    Number(process.env.RECEIPT_REMOTE_ASSET_TIMEOUT_MS || 20000),
+  ),
   receiptMaintenanceIntervalMs: Math.max(10_000, Number(process.env.RECEIPT_MAINTENANCE_INTERVAL_MS || 60_000)),
   receiptRedisUrl: String(process.env.RECEIPT_REDIS_URL || '').trim(),
   receiptRedisPrefix: String(process.env.RECEIPT_REDIS_PREFIX || 'receipt-whatsapp-bot').trim(),
@@ -157,27 +161,9 @@ const env = {
     process.env.RECEIPT_DEFAULT_DOCUMENT_TYPE || DEFAULT_DOCUMENT_TYPE,
   ).trim(),
   receiptCompanyIngestTokens: parseJsonObject(process.env.RECEIPT_COMPANY_INGEST_TOKENS, {}),
-  receiptProviderGoogleVisionEnabled: parseBoolean(
-    process.env.RECEIPT_PROVIDER_GOOGLE_VISION_ENABLED,
-    true,
-  ),
-  receiptProviderGoogleVisionEndpoint: String(
-    process.env.RECEIPT_PROVIDER_GOOGLE_VISION_ENDPOINT
-    || 'https://vision.googleapis.com/v1/images:annotate',
-  ).trim(),
-  receiptProviderGoogleVisionApiKey: String(
-    process.env.RECEIPT_PROVIDER_GOOGLE_VISION_API_KEY || '',
-  ).trim(),
-  receiptProviderGoogleVisionBearerToken: String(
-    process.env.RECEIPT_PROVIDER_GOOGLE_VISION_BEARER_TOKEN || '',
-  ).trim(),
-  receiptProviderGoogleVisionTimeoutMs: Math.max(
-    1000,
-    Number(process.env.RECEIPT_PROVIDER_GOOGLE_VISION_TIMEOUT_MS || 20000),
-  ),
   receiptProviderOpenAiEnabled: parseBoolean(
     process.env.RECEIPT_PROVIDER_OPENAI_ENABLED,
-    true,
+    false,
   ),
   receiptProviderOpenAiBaseUrl: String(
     process.env.RECEIPT_PROVIDER_OPENAI_BASE_URL || 'https://api.openai.com/v1',
@@ -192,7 +178,7 @@ const env = {
   ),
   receiptLegacyFallbackEnabled: parseBoolean(
     process.env.RECEIPT_LEGACY_FALLBACK_ENABLED,
-    true,
+    false,
   ),
   ocrProbeEnabled: String(process.env.OCR_PROBE_ENABLED || 'true').toLowerCase() !== 'false',
   ocrProbeLang: process.env.OCR_PROBE_LANG || 'por',

@@ -2,7 +2,6 @@ const assert = require('assert');
 const env = require('../../config/env');
 const orchestrator = require('../../services/extraction/documentExtractionOrchestrator.service');
 const { resolveProcessingContext } = require('../../config/profiles');
-const googleVisionProvider = require('../../services/extraction/providers/googleVisionExtraction.provider');
 const openAiRescueProvider = require('../../services/extraction/providers/openAiReceiptRescue.provider');
 const legacyProvider = require('../../services/extraction/providers/legacyReceiptExtraction.provider');
 
@@ -12,13 +11,12 @@ module.exports = () => {
       name: 'documentExtractionOrchestrator ignora fallback legado quando desabilitado por env',
       run: async () => {
         const originalLegacyFallbackEnabled = env.receiptLegacyFallbackEnabled;
-        const originalGoogleExtract = googleVisionProvider.extract;
         const originalOpenAiExtract = openAiRescueProvider.extract;
         const originalLegacyExtract = legacyProvider.extract;
         let legacyCalled = false;
 
         env.receiptLegacyFallbackEnabled = false;
-        googleVisionProvider.extract = async function extractPrimary() {
+        openAiRescueProvider.extract = async function extractPrimary() {
           return {
             providerId: this.id,
             status: 'success',
@@ -32,7 +30,7 @@ module.exports = () => {
                   found: true,
                   value: '1710486',
                   confidence: 0.67,
-                  source: 'google_vision',
+                  source: 'openai_rescue',
                 },
                 receiptDate: {
                   key: 'receiptDate',
@@ -40,7 +38,7 @@ module.exports = () => {
                   found: false,
                   value: null,
                   confidence: 0,
-                  source: 'google_vision',
+                  source: 'openai_rescue',
                 },
                 issuerHeader: {
                   key: 'issuerHeader',
@@ -48,7 +46,7 @@ module.exports = () => {
                   found: false,
                   value: null,
                   confidence: 0,
-                  source: 'google_vision',
+                  source: 'openai_rescue',
                 },
               },
               summary: {
@@ -57,13 +55,6 @@ module.exports = () => {
                 averageConfidence: 0.67,
               },
             },
-          };
-        };
-        openAiRescueProvider.extract = async function extractFallback() {
-          return {
-            providerId: this.id,
-            status: 'unavailable',
-            reason: 'openai_not_configured',
           };
         };
         legacyProvider.extract = async function extractLegacy() {
@@ -96,14 +87,13 @@ module.exports = () => {
           });
 
           assert.strictEqual(legacyCalled, false);
-          assert.strictEqual(result.selectedAttempt.providerId, googleVisionProvider.id);
+          assert.strictEqual(result.selectedAttempt.providerId, openAiRescueProvider.id);
           assert.strictEqual(
             result.attempts.some((attempt) => attempt.providerId === legacyProvider.id),
             false,
           );
         } finally {
           env.receiptLegacyFallbackEnabled = originalLegacyFallbackEnabled;
-          googleVisionProvider.extract = originalGoogleExtract;
           openAiRescueProvider.extract = originalOpenAiExtract;
           legacyProvider.extract = originalLegacyExtract;
         }
@@ -112,11 +102,10 @@ module.exports = () => {
     {
       name: 'documentExtractionOrchestrator aprova foto boa quando so um campo textual nao fecha no OCR',
       run: async () => {
-        const originalGoogleExtract = googleVisionProvider.extract;
         const originalOpenAiExtract = openAiRescueProvider.extract;
         const originalLegacyExtract = legacyProvider.extract;
 
-        googleVisionProvider.extract = async function extractPrimary() {
+        openAiRescueProvider.extract = async function extractPrimary() {
           return {
             providerId: this.id,
             status: 'success',
@@ -130,7 +119,7 @@ module.exports = () => {
                   found: true,
                   value: '1710486',
                   confidence: 0.93,
-                  source: 'google_vision',
+                  source: 'openai_rescue',
                 },
                 receiptDate: {
                   key: 'receiptDate',
@@ -138,7 +127,7 @@ module.exports = () => {
                   found: true,
                   value: '20/03/2026',
                   confidence: 0.9,
-                  source: 'google_vision',
+                  source: 'openai_rescue',
                 },
                 issuerHeader: {
                   key: 'issuerHeader',
@@ -146,7 +135,7 @@ module.exports = () => {
                   found: false,
                   value: null,
                   confidence: 0,
-                  source: 'google_vision',
+                  source: 'openai_rescue',
                 },
               },
               summary: {
@@ -155,13 +144,6 @@ module.exports = () => {
                 averageConfidence: 0.92,
               },
             },
-          };
-        };
-        openAiRescueProvider.extract = async function extractFallback() {
-          return {
-            providerId: this.id,
-            status: 'unavailable',
-            reason: 'openai_not_configured',
           };
         };
         legacyProvider.extract = async function extractLegacy() {
@@ -179,7 +161,7 @@ module.exports = () => {
             context,
           });
 
-          assert.strictEqual(result.selectedAttempt.providerId, googleVisionProvider.id);
+          assert.strictEqual(result.selectedAttempt.providerId, openAiRescueProvider.id);
           assert.strictEqual(result.decision.classification, 'valid');
           assert.strictEqual(result.decision.accepted, true);
           assert.ok(
@@ -188,7 +170,6 @@ module.exports = () => {
             ),
           );
         } finally {
-          googleVisionProvider.extract = originalGoogleExtract;
           openAiRescueProvider.extract = originalOpenAiExtract;
           legacyProvider.extract = originalLegacyExtract;
         }

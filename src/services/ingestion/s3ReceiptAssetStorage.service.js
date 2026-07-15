@@ -81,7 +81,7 @@ module.exports = {
       if (upload && upload.path) {
         buffer = await fs.promises.readFile(upload.path);
       } else if (imageUrl) {
-        const remoteAsset = await readRemoteAsset(imageUrl, env.receiptProviderGoogleVisionTimeoutMs);
+        const remoteAsset = await readRemoteAsset(imageUrl, env.receiptRemoteAssetTimeoutMs);
         buffer = remoteAsset.buffer;
         contentType = remoteAsset.mimeType;
       }

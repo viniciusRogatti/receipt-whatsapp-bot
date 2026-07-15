@@ -232,12 +232,12 @@ Variaveis principais:
 - `RECEIPT_S3_FORCE_PATH_STYLE`: compatibilidade com MinIO/R2/LocalStack
 - `RECEIPT_S3_PUBLIC_BASE_URL`: URL publica base opcional
 - `RECEIPT_MAINTENANCE_INTERVAL_MS`: janela da rotina de limpeza automatica
+- `RECEIPT_REMOTE_ASSET_TIMEOUT_MS`: timeout generico para baixar uma imagem remota na API de ingestao
 - `RECEIPT_COMPANY_INGEST_TOKENS`: mapa JSON de tokens por empresa
 - `RECEIPT_DEFAULT_COMPANY_ID`: empresa padrao do endpoint central
 - `RECEIPT_DEFAULT_SOURCE_ID`: origem padrao do endpoint central
 - `RECEIPT_DEFAULT_DOCUMENT_TYPE`: documento padrao do endpoint central
-- `RECEIPT_PROVIDER_GOOGLE_VISION_*`: configuracao do provider principal da `Opção A`
-- `RECEIPT_PROVIDER_OPENAI_*`: configuracao do fallback `Opção B`
+- `RECEIPT_PROVIDER_OPENAI_*`: provider opcional da API de ingestao; fica desabilitado no fluxo operacional atual
 - `OCR_PROBE_LANG`: idioma leve para triagem inicial
 - `OCR_PROBE_VARIANT_LIMIT`: quantas variantes entram na triagem inicial
 - `OCR_FULL_LANG`: idioma do OCR completo
@@ -415,17 +415,12 @@ Para adicionar uma nova origem:
 
 ## Providers de extracao
 
-Ordem atual de execucao por padrao:
+O fluxo operacional do WhatsApp usa `caption_only`: a NF e identificada pela
+legenda e nenhuma API analisa a imagem. O Google Cloud Vision foi removido.
 
-1. `google_vision_document_text`
-2. `openai_receipt_rescue`
-3. `legacy_receipt_analysis`
-
-Papel de cada um:
-
-- `Opção A`: OCR principal com resposta estruturada e regioes
-- `Opção B`: resgate multimodal quando o principal falhar ou vier fraco
-- `Legado`: convivencia temporaria para migracao segura
+A API generica de ingestao ainda preserva, desabilitados por padrao na
+producao, os providers `openai_receipt_rescue` e `legacy_receipt_analysis` para
+compatibilidade enquanto essa parte da arquitetura e revisada.
 
 ## Fila e estado
 

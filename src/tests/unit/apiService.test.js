@@ -630,7 +630,7 @@ module.exports = () => {
         try {
           const result = await apiService.syncProcessingResult({
             extraction: {
-              providerId: 'google_vision_document_text',
+              providerId: 'openai_receipt_rescue',
               parsedDocument: {
                 fields: {
                   invoiceNumber: {
@@ -779,7 +779,7 @@ module.exports = () => {
         try {
           const result = await apiService.syncProcessingResult({
             extraction: {
-              providerId: 'google_vision_document_text',
+              providerId: 'openai_receipt_rescue',
               parsedDocument: {
                 fields: {
                   invoiceNumber: {

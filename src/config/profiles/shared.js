@@ -17,7 +17,6 @@ const EXTRACTION_FIELD_KEYS = {
 };
 
 const PROCESSING_ENGINE_IDS = {
-  googleVision: 'google_vision_document_text',
   openAiRescue: 'openai_receipt_rescue',
   legacyReceiptAnalysis: 'legacy_receipt_analysis',
 };
