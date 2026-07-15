@@ -172,7 +172,9 @@ async function main() {
               summary.processed += 1;
               if (result?.backendSync?.action === 'mark_invoice_delivered') {
                 const previousStatus = String(result?.backendSync?.lookup?.invoice?.status || '').toLowerCase();
-                if (previousStatus === 'delivered') summary.alreadyDelivered += 1;
+                const activityAlreadyExisted = result?.backendSync?.activity?.created === false
+                  && result?.backendSync?.activity?.skipped !== true;
+                if (previousStatus === 'delivered' || activityAlreadyExisted) summary.alreadyDelivered += 1;
                 else summary.delivered += 1;
               } else if (result?.backendSync?.action === 'create_receipt_alert') summary.review += 1;
             } catch (error) {
