@@ -56,18 +56,23 @@ async function main() {
     client.on('auth_failure', (message) => reject(new Error(`Falha de autenticacao: ${message}`)));
     client.on('ready', async () => {
       try {
-        const chats = await client.getChats();
-        const groups = chats.filter((chat) => {
-          if (!chat.isGroup) return false;
-          const groupId = chat.id?._serialized || String(chat.id || '');
-          const policy = resolveWhatsappGroupPolicy({ groupId, groupName: chat.name, groupPolicies: env.whatsappGroupPolicies });
-          return Boolean(policy.companyCode) && isGroupAllowed({
+        const configuredGroupIds = Array.from(new Set([
+          ...env.whatsappAllowedGroupIds,
+          ...Object.keys(env.whatsappGroupPolicies || {}).filter((key) => String(key).endsWith('@g.us')),
+        ]));
+        const groups = [];
+        for (const groupId of configuredGroupIds) {
+          const policy = resolveWhatsappGroupPolicy({ groupId, groupPolicies: env.whatsappGroupPolicies });
+          if (!policy.companyCode || !isGroupAllowed({
             groupId,
-            groupName: chat.name,
+            groupName: null,
             allowedGroupIds: env.whatsappAllowedGroupIds,
             allowedGroupNames: env.whatsappAllowedGroupNames,
-          });
-        });
+          })) continue;
+          // eslint-disable-next-line no-await-in-loop
+          const chat = await client.getChatById(groupId);
+          groups.push(chat);
+        }
 
         summary.groups = groups.length;
         for (const chat of groups) {

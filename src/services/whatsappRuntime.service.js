@@ -305,6 +305,14 @@ const buildMessageContext = async (message, chat) => {
   };
 };
 
+const resolveMessageGroupName = (message = {}) => normalizeMessageText(
+  message.groupName
+  || message._data?.chatName
+  || message._data?.groupSubject
+  || message._data?.notifyName
+  || '',
+) || null;
+
 const handleTextCommand = async (message) => {
   if (!env.whatsappCommandsEnabled) return false;
 
@@ -383,22 +391,18 @@ const handleMessage = async (message) => {
   if (!isGroupMessage(message.from)) return;
 
   await recordMessageReceived();
-
-  const chat = await message.getChat();
-  if (!chat || !chat.isGroup) {
-    await recordIgnoredMessage('chat_not_group');
-    return;
-  }
+  const groupName = resolveMessageGroupName(message);
+  const chat = { isGroup: true, name: groupName };
 
   if (!isGroupAllowed({
     groupId: message.from,
-    groupName: chat.name,
+    groupName,
     allowedGroupIds: env.whatsappAllowedGroupIds,
     allowedGroupNames: env.whatsappAllowedGroupNames,
   })) {
     logger.debug('Mensagem de grupo ignorada por nao estar na allowlist.', {
       chatId: message.from,
-      groupName: chat.name || null,
+      groupName,
     });
     await recordIgnoredMessage('group_not_allowed');
     return;
