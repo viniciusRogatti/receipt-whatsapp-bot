@@ -21,8 +21,48 @@ const isTargetDate = (timestamp) => new Intl.DateTimeFormat('en-CA', {
 }).format(new Date(Number(timestamp || 0) * 1000)) === targetDate;
 
 const messageText = (message) => String(
-  message.body || message.caption || message._data?.caption || message._data?.body || '',
+  message.body || message.caption || '',
 ).trim();
+
+const listRawGroups = (client) => client.pupPage.evaluate(() => window
+  .require('WAWebCollections')
+  .Chat
+  .getModelsArray()
+  .map((chat) => ({
+    id: chat.id?._serialized || '',
+    name: chat.formattedTitle || chat.name || chat.contact?.name || null,
+  }))
+  .filter((chat) => chat.id.endsWith('@g.us')));
+
+const fetchRawMessages = (client, groupId, limit) => client.pupPage.evaluate(async ({ chatId, fetchCount }) => {
+  const chatWid = window.require('WAWebWidFactory').createWid(chatId);
+  const chats = window.require('WAWebCollections').Chat;
+  const chat = chats.get(chatWid) || (await window.require('WAWebFindChatAction').findOrCreateLatestChat(chatWid))?.chat;
+  if (!chat) return [];
+
+  let messages = chat.msgs.getModelsArray();
+  while (messages.length < fetchCount) {
+    let loaded;
+    try {
+      loaded = await window.require('WAWebChatLoadMessages').loadEarlierMsgs({ chat });
+    } catch (_error) {
+      break;
+    }
+    if (!loaded?.length) break;
+    messages = chat.msgs.getModelsArray();
+  }
+
+  messages.sort((left, right) => Number(left.t || 0) - Number(right.t || 0));
+  return messages.slice(-fetchCount).map((message) => ({
+    id: message.id?._serialized || String(message.id || ''),
+    mediaId: message.id?.id || null,
+    fromMe: Boolean(message.id?.fromMe),
+    isNotification: Boolean(message.isNotification),
+    timestamp: Number(message.t || 0),
+    hasMedia: Boolean(message.directPath),
+    body: String(message.caption || message.body || ''),
+  }));
+}, { chatId: groupId, fetchCount: limit });
 
 const buildClient = () => new Client({
   authStrategy: new LocalAuth({
@@ -65,9 +105,9 @@ async function main() {
         ]));
         const groupsById = new Map();
         try {
-          const availableChats = await client.getChats();
-          availableChats.filter((chat) => chat.isGroup).forEach((chat) => {
-            const groupId = chat.id?._serialized || String(chat.id || '');
+          const availableChats = await listRawGroups(client);
+          availableChats.forEach((chat) => {
+            const groupId = chat.id;
             const policy = resolveWhatsappGroupPolicy({ groupId, groupName: chat.name, groupPolicies: env.whatsappGroupPolicies });
             if (policy.companyCode && isGroupAllowed({
               groupId,
@@ -90,30 +130,29 @@ async function main() {
             allowedGroupNames: env.whatsappAllowedGroupNames,
           })) continue;
           // eslint-disable-next-line no-await-in-loop
-          const chat = await client.getChatById(groupId);
-          groupsById.set(groupId, chat);
+          groupsById.set(groupId, { id: groupId, name: null });
         }
 
         const groups = Array.from(groupsById.values());
         summary.groups = groups.length;
         for (const chat of groups) {
           // eslint-disable-next-line no-await-in-loop
-          const messages = await chat.fetchMessages({ limit: fetchLimit });
-          const todayMessages = messages.filter((message) => isTargetDate(message.timestamp) && !message.fromMe);
+          const messages = await fetchRawMessages(client, chat.id, fetchLimit);
+          const todayMessages = messages.filter((message) => isTargetDate(message.timestamp) && !message.fromMe && !message.isNotification);
           summary.messages += todayMessages.length;
 
           for (const message of todayMessages) {
             if (!message.hasMedia) continue;
             summary.photos += 1;
             try {
-              const groupId = chat.id?._serialized || String(chat.id || '');
+              const groupId = chat.id;
               const result = await whatsappService.handleIncomingTextMessage({
                 message: {
                   id: message.id?._serialized || String(message.id || ''),
                   groupId,
                   groupName: chat.name || null,
                   chatId: groupId,
-                  mediaId: message._data?.id?.id || null,
+                  mediaId: message.mediaId,
                   timestamp: Number(message.timestamp || 0) * 1000,
                   messageText: messageText(message),
                   caption: messageText(message),
@@ -133,7 +172,7 @@ async function main() {
               } else if (result?.backendSync?.action === 'create_receipt_alert') summary.review += 1;
             } catch (error) {
               summary.failed += 1;
-              console.error(`Falha ao recuperar mensagem ${message.id?._serialized || '-'}: ${error.message}`);
+              console.error(`Falha ao recuperar mensagem ${message.id || '-'}: ${error.message}`);
             }
           }
         }

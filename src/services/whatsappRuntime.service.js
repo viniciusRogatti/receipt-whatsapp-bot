@@ -225,13 +225,15 @@ const replyIfEnabled = async (message, text) => {
 };
 
 const listAvailableGroups = async (client) => {
-  const chats = await client.getChats();
-  const groups = chats
-    .filter((chat) => chat.isGroup)
+  const groups = await client.pupPage.evaluate(() => window
+    .require('WAWebCollections')
+    .Chat
+    .getModelsArray()
     .map((chat) => ({
-      id: chat.id && chat.id._serialized ? chat.id._serialized : String(chat.id || ''),
-      name: chat.name || null,
-    }));
+      id: chat.id?._serialized || '',
+      name: chat.formattedTitle || chat.name || chat.contact?.name || null,
+    }))
+    .filter((chat) => chat.id.endsWith('@g.us')));
 
   groupNamesById.clear();
   groups.forEach((group) => {
