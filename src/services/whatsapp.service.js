@@ -67,7 +67,7 @@ module.exports = {
     }
 
     const backendSync = await apiService.syncWhatsappTextReceipt({
-      imagePath: null,
+      imagePath: message.imagePath || null,
       metadata: messageMetadata,
     });
 

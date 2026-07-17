@@ -464,29 +464,59 @@ const handleTextCommand = async (message) => {
 
 const handleIncomingMedia = async (message, chat) => {
   const messageContext = await buildMessageContext(message, chat);
-  const result = await whatsappService.handleIncomingTextMessage({
-    message: messageContext,
-    reply: async (text) => replyIfEnabled(message, text),
-  });
+  let tempFilePath = null;
+  try {
+    const media = await message.downloadMedia();
+    if (media?.data && String(media.mimetype || '').toLowerCase().startsWith('image/')) {
+      await ensureDir(env.receiptIngressTmpDir);
+      const extension = String(media.mimetype).toLowerCase().includes('png')
+        ? '.png'
+        : String(media.mimetype).toLowerCase().includes('webp') ? '.webp' : '.jpg';
+      tempFilePath = path.join(
+        env.receiptIngressTmpDir,
+        `whatsapp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`,
+      );
+      await fs.promises.writeFile(tempFilePath, Buffer.from(media.data, 'base64'));
+      messageContext.imagePath = tempFilePath;
+    }
 
-  if (result && result.ignored) {
-    logger.debug('Midia ignorada porque o texto/caption nao trouxe NF candidata.', {
+    const result = await whatsappService.handleIncomingTextMessage({
+      message: messageContext,
+      reply: async (text) => replyIfEnabled(message, text),
+    });
+
+    if (
+      tempFilePath
+      && result?.backendSync?.reason === 'invoice_not_found_from_message_text'
+    ) {
+      await apiService.storeUnidentifiedReceiptEvidence({
+        imagePath: tempFilePath,
+        messageId: messageContext.id,
+        companyScope: { id: Number(messageContext.expectedCompanyId) || Number(messageContext.companyId) || null },
+      });
+    }
+
+    if (result && result.ignored) {
+      logger.debug('Midia ignorada porque o texto/caption nao trouxe NF candidata.', {
+        chatId: messageContext.chatId,
+        groupName: messageContext.groupName,
+        messageId: messageContext.id,
+      });
+      return result;
+    }
+
+    logger.info('Mensagem com midia processada em modo texto no WhatsApp.', {
       chatId: messageContext.chatId,
       groupName: messageContext.groupName,
       messageId: messageContext.id,
+      backendAction: result && result.backendSync ? result.backendSync.action : null,
+      backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
+      replied: result ? result.replied : false,
     });
     return result;
+  } finally {
+    if (tempFilePath) await fs.promises.unlink(tempFilePath).catch(() => undefined);
   }
-
-  logger.info('Mensagem com midia processada em modo texto no WhatsApp.', {
-    chatId: messageContext.chatId,
-    groupName: messageContext.groupName,
-    messageId: messageContext.id,
-    backendAction: result && result.backendSync ? result.backendSync.action : null,
-    backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
-    replied: result ? result.replied : false,
-  });
-  return result;
 };
 
 const handleIncomingText = async (message, chat) => {

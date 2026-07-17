@@ -1259,6 +1259,29 @@ const importRecoveredReceiptInBackend = async ({ invoiceNumber, imagePath, compa
 };
 
 module.exports = {
+  async storeUnidentifiedReceiptEvidence({ imagePath, messageId, companyScope = null }) {
+    if (!isRemoteBackendApiEnabled() || !imagePath || !normalizeText(messageId)) {
+      return { stored: false, skipped: true };
+    }
+    const preparedEvidence = await prepareReceiptEvidenceBuffer(imagePath);
+    const form = new FormData();
+    form.set('file', new Blob([preparedEvidence.buffer], {
+      type: guessMimeTypeFromPath(imagePath),
+    }), path.basename(imagePath));
+    form.set('messageId', normalizeText(messageId));
+    const response = await fetch(`${env.receiptBackendApiBaseUrl}/api/receipt-bot/unidentified-receipts`, {
+      method: 'POST',
+      headers: buildBackendApiHeaders({ includeJsonContentType: false, companyScope }),
+      body: form,
+    });
+    const rawText = await response.text();
+    const payload = rawText ? parseJsonSafe(rawText) : null;
+    if (!response.ok) {
+      throw new Error(payload?.message || payload?.error || `Falha HTTP ${response.status} ao armazenar canhoto nao identificado.`);
+    }
+    return payload || { stored: true };
+  },
+
   async listPendingReceiptCorrections() {
     if (!isRemoteBackendApiEnabled()) return [];
     const response = await fetch(`${env.receiptBackendApiBaseUrl}/api/receipt-bot/receipt-corrections`, {
