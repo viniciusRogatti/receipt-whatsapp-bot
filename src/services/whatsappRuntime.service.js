@@ -84,6 +84,14 @@ const extractPhoneDigits = (value) => {
 
 const normalizeMessageText = (value) => String(value || '').trim();
 
+const isPhotoMessage = (message = {}) => {
+  const mediaType = String(message.type || message._data?.type || '').toLowerCase();
+  if (mediaType) return mediaType === 'image';
+  // Em mensagens novas, o WhatsApp pode ainda nao preencher o tipo da midia.
+  // Nesse caso, a presenca de midia e suficiente para manter o fluxo da foto.
+  return Boolean(message.hasMedia);
+};
+
 const buildPuppeteerOptions = () => {
   const args = env.whatsappBrowserArgs.length
     ? env.whatsappBrowserArgs.slice()
@@ -306,7 +314,7 @@ const buildMessageContext = async (message, chat) => {
     messageText: messageText || null,
     caption: messageText || null,
     body: messageText || null,
-    hasPhoto: String(message.type || message._data?.type || '').toLowerCase() === 'image',
+    hasPhoto: isPhotoMessage(message),
     whatsappProcessingMode: groupPolicy.processingMode || 'caption_only',
     expectedCompanyCode: groupPolicy.companyCode || null,
     expectedCompanyId: groupPolicy.companyId || null,
@@ -418,7 +426,7 @@ const handleMessage = async (message) => {
     return;
   }
 
-  if (message.hasMedia) {
+  if (isPhotoMessage(message)) {
     const result = await handleIncomingMedia(message, chat);
     if (result?.ignored) await recordIgnoredMessage(result.reason);
     else await recordMessageProcessed();

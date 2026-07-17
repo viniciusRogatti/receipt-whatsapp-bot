@@ -182,7 +182,7 @@ async function main() {
           summary.messages += todayMessages.length;
 
           for (const message of todayMessages) {
-            if (!message.hasMedia || message.type !== 'image') continue;
+            if (!message.hasMedia || (message.type && message.type !== 'image')) continue;
             summary.photos += 1;
             try {
               const groupId = chat.id;
