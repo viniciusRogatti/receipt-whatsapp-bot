@@ -1259,6 +1259,55 @@ const importRecoveredReceiptInBackend = async ({ invoiceNumber, imagePath, compa
 };
 
 module.exports = {
+  async listPendingReceiptCorrections() {
+    if (!isRemoteBackendApiEnabled()) return [];
+    const response = await fetch(`${env.receiptBackendApiBaseUrl}/api/receipt-bot/receipt-corrections`, {
+      headers: buildBackendApiHeaders(),
+    });
+    const rawText = await response.text();
+    const payload = rawText ? parseJsonSafe(rawText) : null;
+    if (!response.ok) {
+      throw new Error(payload?.message || payload?.error || `Falha HTTP ${response.status} ao listar correcoes de canhoto.`);
+    }
+    return Array.isArray(payload?.rows) ? payload.rows : [];
+  },
+
+  async completePendingReceiptCorrection(notificationId, companyScope = null) {
+    if (!isRemoteBackendApiEnabled()) return { resolved: false, skipped: true };
+    const response = await fetch(
+      `${env.receiptBackendApiBaseUrl}/api/receipt-bot/receipt-corrections/${encodeURIComponent(notificationId)}/complete`,
+      {
+        method: 'POST',
+        headers: buildBackendApiHeaders({ companyScope }),
+        body: '{}',
+      },
+    );
+    const rawText = await response.text();
+    const payload = rawText ? parseJsonSafe(rawText) : null;
+    if (!response.ok) {
+      throw new Error(payload?.message || payload?.error || `Falha HTTP ${response.status} ao concluir correcao de canhoto.`);
+    }
+    return payload || { resolved: true };
+  },
+
+  async failPendingReceiptCorrection(notificationId, errorMessage, companyScope = null) {
+    if (!isRemoteBackendApiEnabled()) return { failed: false, skipped: true };
+    const response = await fetch(
+      `${env.receiptBackendApiBaseUrl}/api/receipt-bot/receipt-corrections/${encodeURIComponent(notificationId)}/fail`,
+      {
+        method: 'POST',
+        headers: buildBackendApiHeaders({ companyScope }),
+        body: JSON.stringify({ error: String(errorMessage || '').trim() }),
+      },
+    );
+    const rawText = await response.text();
+    const payload = rawText ? parseJsonSafe(rawText) : null;
+    if (!response.ok) {
+      throw new Error(payload?.message || payload?.error || `Falha HTTP ${response.status} ao registrar erro da correcao.`);
+    }
+    return payload || { failed: true };
+  },
+
   async findInvoiceByNumber(invoiceNumber, options = {}) {
     const lookupMode = env.receiptInvoiceLookupMode;
     const key = normalizeInvoiceNumber(invoiceNumber);
