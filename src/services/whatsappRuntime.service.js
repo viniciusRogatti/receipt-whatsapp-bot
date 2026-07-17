@@ -6,7 +6,6 @@ const env = require('../config/env');
 const logger = require('../utils/logger');
 const { ensureDir } = require('../utils/file');
 const whatsappService = require('./whatsapp.service');
-const apiService = require('./api.service');
 const whatsappConnectionStateService = require('./whatsappConnectionState.service');
 const {
   isGroupAllowed,
@@ -19,8 +18,6 @@ let activeClient = null;
 let restartScheduled = false;
 let healthcheckTimer = null;
 let healthcheckFailures = 0;
-let receiptCorrectionTimer = null;
-let receiptCorrectionInFlight = false;
 let stateWritePromise = Promise.resolve();
 const groupNamesById = new Map();
 
@@ -52,124 +49,6 @@ const clearHealthcheck = () => {
   if (!healthcheckTimer) return;
   clearInterval(healthcheckTimer);
   healthcheckTimer = null;
-};
-
-const clearReceiptCorrectionMonitor = () => {
-  if (!receiptCorrectionTimer) return;
-  clearInterval(receiptCorrectionTimer);
-  receiptCorrectionTimer = null;
-};
-
-const recoverWhatsappMessageById = async (client, messageId) => {
-  try {
-    const directMessage = await client.getMessageById(messageId);
-    if (directMessage) return directMessage;
-  } catch {
-    // Mensagens anteriores ao restart podem nao estar materializadas no Store.
-    // Nesse caso carregamos o historico recente do grupo e procuramos pelo id completo.
-  }
-
-  const chatIdMatch = String(messageId || '').match(/^(?:true|false)_([^_]+)_/);
-  const chatId = chatIdMatch ? chatIdMatch[1] : '';
-  if (!chatId) return null;
-  let chat = null;
-  let messages = [];
-  try {
-    chat = await client.getChatById(chatId);
-    if (!chat || typeof chat.fetchMessages !== 'function') return null;
-    messages = await chat.fetchMessages({ limit: 500 });
-  } catch (error) {
-    throw new Error(`Falha ao carregar historico do grupo: ${String(error?.message || error || 'erro desconhecido')}`);
-  }
-  return messages.find((message) => (
-    String(message?.id?._serialized || message?.id || '') === messageId
-  )) || null;
-};
-
-const processPendingReceiptCorrections = async (client) => {
-  if (receiptCorrectionInFlight || activeClient !== client) return;
-  receiptCorrectionInFlight = true;
-  try {
-    const corrections = await apiService.listPendingReceiptCorrections();
-    for (const correction of corrections) {
-      const messageId = String(correction?.messageId || '').trim();
-      const correctedInvoiceNumber = String(correction?.correctedInvoiceNumber || '').trim();
-      if (!messageId || !correctedInvoiceNumber) continue;
-
-      let tempFilePath = null;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const message = await recoverWhatsappMessageById(client, messageId);
-        if (!message || !message.hasMedia) throw new Error('A mensagem original nao possui mais uma foto recuperavel.');
-        // eslint-disable-next-line no-await-in-loop
-        let media = null;
-        try {
-          // eslint-disable-next-line no-await-in-loop
-          media = await message.downloadMedia();
-        } catch (error) {
-          throw new Error(`Falha ao baixar a foto original: ${String(error?.message || error || 'erro desconhecido')}`);
-        }
-        if (!media?.data || !String(media.mimetype || '').toLowerCase().startsWith('image/')) {
-          throw new Error('A midia original nao e uma imagem valida.');
-        }
-        await ensureDir(env.receiptIngressTmpDir);
-        const extension = String(media.mimetype).toLowerCase().includes('png')
-          ? '.png'
-          : String(media.mimetype).toLowerCase().includes('webp') ? '.webp' : '.jpg';
-        tempFilePath = path.join(
-          env.receiptIngressTmpDir,
-          `correction-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`,
-        );
-        // eslint-disable-next-line no-await-in-loop
-        await fs.promises.writeFile(tempFilePath, Buffer.from(media.data, 'base64'));
-        const companyScope = { id: Number(correction.companyId) || null };
-        // eslint-disable-next-line no-await-in-loop
-        await apiService.importRecoveredReceiptEvidence({
-          invoiceNumber: correctedInvoiceNumber,
-          imagePath: tempFilePath,
-          companyScope,
-          metadata: {
-            source: 'whatsapp_correction',
-            messageId,
-            reportedInvoiceNumber: correction.reportedInvoiceNumber || null,
-          },
-        });
-        // eslint-disable-next-line no-await-in-loop
-        await apiService.completePendingReceiptCorrection(correction.notificationId, companyScope);
-        logger.info('Canhoto recuperado e vinculado a NF corrigida.', {
-          reportedInvoiceNumber: correction.reportedInvoiceNumber || null,
-          correctedInvoiceNumber,
-          messageId,
-        });
-      } catch (error) {
-        const companyScope = { id: Number(correction.companyId) || null };
-        // eslint-disable-next-line no-await-in-loop
-        await apiService.failPendingReceiptCorrection(
-          correction.notificationId,
-          error.message,
-          companyScope,
-        ).catch(() => undefined);
-        logger.warn('Nao foi possivel concluir correcao de canhoto agora.', {
-          correctedInvoiceNumber,
-          messageId,
-          error: error.message,
-        });
-      } finally {
-        if (tempFilePath) {
-          // eslint-disable-next-line no-await-in-loop
-          await fs.promises.unlink(tempFilePath).catch(() => undefined);
-        }
-      }
-    }
-  } finally {
-    receiptCorrectionInFlight = false;
-  }
-};
-
-const startReceiptCorrectionMonitor = (client) => {
-  clearReceiptCorrectionMonitor();
-  setTimeout(() => void processPendingReceiptCorrections(client), 5000);
-  receiptCorrectionTimer = setInterval(() => void processPendingReceiptCorrections(client), 15000);
 };
 
 const recordMessageReceived = () => persistReadyState({
@@ -464,67 +343,29 @@ const handleTextCommand = async (message) => {
 
 const handleIncomingMedia = async (message, chat) => {
   const messageContext = await buildMessageContext(message, chat);
-  let tempFilePath = null;
-  try {
-    // A baixa normal depende apenas da NF na legenda. Baixar a foto antes
-    // disso fazia uma falha temporária da mídia impedir o processamento.
-    const result = await whatsappService.handleIncomingTextMessage({
-      message: messageContext,
-      reply: async (text) => replyIfEnabled(message, text),
-    });
+  const result = await whatsappService.handleIncomingTextMessage({
+    message: messageContext,
+    reply: async (text) => replyIfEnabled(message, text),
+  });
 
-    if (
-      && result?.backendSync?.reason === 'invoice_not_found_from_message_text'
-    ) {
-      try {
-        const media = await message.downloadMedia();
-        if (media?.data && String(media.mimetype || '').toLowerCase().startsWith('image/')) {
-          await ensureDir(env.receiptIngressTmpDir);
-          const extension = String(media.mimetype).toLowerCase().includes('png')
-            ? '.png'
-            : String(media.mimetype).toLowerCase().includes('webp') ? '.webp' : '.jpg';
-          tempFilePath = path.join(
-            env.receiptIngressTmpDir,
-            `whatsapp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`,
-          );
-          await fs.promises.writeFile(tempFilePath, Buffer.from(media.data, 'base64'));
-          await apiService.storeUnidentifiedReceiptEvidence({
-            imagePath: tempFilePath,
-            messageId: messageContext.id,
-            companyScope: { id: Number(messageContext.expectedCompanyId) || Number(messageContext.companyId) || null },
-          });
-        }
-      } catch (error) {
-        logger.warn('Nao foi possivel salvar a evidencia da foto sem NF identificada.', {
-          chatId: messageContext.chatId,
-          groupName: messageContext.groupName,
-          messageId: messageContext.id,
-          error: error.message,
-        });
-      }
-    }
-
-    if (result && result.ignored) {
-      logger.debug('Midia ignorada porque o texto/caption nao trouxe NF candidata.', {
-        chatId: messageContext.chatId,
-        groupName: messageContext.groupName,
-        messageId: messageContext.id,
-      });
-      return result;
-    }
-
-    logger.info('Mensagem com midia processada em modo texto no WhatsApp.', {
+  if (result && result.ignored) {
+    logger.debug('Midia ignorada porque o texto/caption nao trouxe NF candidata.', {
       chatId: messageContext.chatId,
       groupName: messageContext.groupName,
       messageId: messageContext.id,
-      backendAction: result && result.backendSync ? result.backendSync.action : null,
-      backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
-      replied: result ? result.replied : false,
     });
     return result;
-  } finally {
-    if (tempFilePath) await fs.promises.unlink(tempFilePath).catch(() => undefined);
   }
+
+  logger.info('Mensagem com midia processada em modo texto no WhatsApp.', {
+    chatId: messageContext.chatId,
+    groupName: messageContext.groupName,
+    messageId: messageContext.id,
+    backendAction: result && result.backendSync ? result.backendSync.action : null,
+    backendReason: result && result.backendSync ? result.backendSync.reason || null : null,
+    replied: result ? result.replied : false,
+  });
+  return result;
 };
 
 const handleIncomingText = async (message, chat) => {
@@ -706,7 +547,6 @@ module.exports = {
         }));
       finalizeStartupSuccess();
       startHealthcheck(client);
-      startReceiptCorrectionMonitor(client);
       if (env.receiptAsyncWhatsappMode) {
         logger.warn('Modo assincrono ativo no WhatsApp. O bot vai enfileirar imagens, mas nao respondera no grupo apos o worker concluir.', {
           clientId: env.whatsappClientId,
@@ -721,7 +561,6 @@ module.exports = {
 
     client.on('auth_failure', (message) => {
       clearHealthcheck();
-      clearReceiptCorrectionMonitor();
       logger.error('Falha de autenticacao no WhatsApp.', {
         clientId: env.whatsappClientId,
         details: message,
@@ -743,7 +582,6 @@ module.exports = {
 
     client.on('disconnected', (reason) => {
       clearHealthcheck();
-      clearReceiptCorrectionMonitor();
       logger.warn('Cliente do WhatsApp desconectado.', {
         clientId: env.whatsappClientId,
         reason,
@@ -820,7 +658,6 @@ module.exports = {
   async stop() {
     restartScheduled = false;
     clearHealthcheck();
-    clearReceiptCorrectionMonitor();
     if (!activeClient) {
       await whatsappConnectionStateService.writeConnectionState('stopped').catch(() => undefined);
       return;
