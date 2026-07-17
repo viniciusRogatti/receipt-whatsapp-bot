@@ -60,6 +60,26 @@ const clearReceiptCorrectionMonitor = () => {
   receiptCorrectionTimer = null;
 };
 
+const recoverWhatsappMessageById = async (client, messageId) => {
+  try {
+    const directMessage = await client.getMessageById(messageId);
+    if (directMessage) return directMessage;
+  } catch {
+    // Mensagens anteriores ao restart podem nao estar materializadas no Store.
+    // Nesse caso carregamos o historico recente do grupo e procuramos pelo id completo.
+  }
+
+  const chatIdMatch = String(messageId || '').match(/^(?:true|false)_([^_]+)_/);
+  const chatId = chatIdMatch ? chatIdMatch[1] : '';
+  if (!chatId) return null;
+  const chat = await client.getChatById(chatId);
+  if (!chat || typeof chat.fetchMessages !== 'function') return null;
+  const messages = await chat.fetchMessages({ limit: 500 });
+  return messages.find((message) => (
+    String(message?.id?._serialized || message?.id || '') === messageId
+  )) || null;
+};
+
 const processPendingReceiptCorrections = async (client) => {
   if (receiptCorrectionInFlight || activeClient !== client) return;
   receiptCorrectionInFlight = true;
@@ -73,7 +93,7 @@ const processPendingReceiptCorrections = async (client) => {
       let tempFilePath = null;
       try {
         // eslint-disable-next-line no-await-in-loop
-        const message = await client.getMessageById(messageId);
+        const message = await recoverWhatsappMessageById(client, messageId);
         if (!message || !message.hasMedia) throw new Error('A mensagem original nao possui mais uma foto recuperavel.');
         // eslint-disable-next-line no-await-in-loop
         const media = await message.downloadMedia();
