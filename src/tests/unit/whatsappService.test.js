@@ -36,6 +36,7 @@ module.exports = () => [
             id: 'message-pronto-6678',
             groupName: 'Canhotos Pronto',
             messageText: '6678',
+            hasPhoto: true,
           },
         });
 
@@ -45,6 +46,24 @@ module.exports = () => [
       } finally {
         apiService.syncWhatsappTextReceipt = originalSync;
       }
+    },
+  },
+  {
+    name: 'whatsappService ignora NF enviada sem foto',
+    run: async () => {
+      const result = await handleIncomingTextMessage({
+        message: {
+          id: 'message-only-text-6678',
+          groupName: 'Canhotos Pronto',
+          messageText: '6678',
+          hasPhoto: false,
+        },
+      });
+
+      assert.deepStrictEqual(result, {
+        ignored: true,
+        reason: 'message_without_photo',
+      });
     },
   },
 ];

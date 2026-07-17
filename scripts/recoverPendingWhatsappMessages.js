@@ -96,6 +96,7 @@ const fetchRawMessages = (client, groupId, limit) => evaluateWhatsappPage(client
     isNotification: Boolean(message.isNotification),
     timestamp: Number(message.t || 0),
     hasMedia: Boolean(message.directPath),
+    type: String(message.type || '').toLowerCase(),
     body: String(message.caption || message.body || ''),
   }));
 }, { chatId: groupId, fetchCount: limit });
@@ -181,7 +182,7 @@ async function main() {
           summary.messages += todayMessages.length;
 
           for (const message of todayMessages) {
-            if (!message.hasMedia) continue;
+            if (!message.hasMedia || message.type !== 'image') continue;
             summary.photos += 1;
             try {
               const groupId = chat.id;
@@ -196,6 +197,7 @@ async function main() {
                   messageText: messageText(message),
                   caption: messageText(message),
                   body: messageText(message),
+                  hasPhoto: true,
                 },
               });
 

@@ -46,6 +46,7 @@ const buildMessageMetadata = (message = {}) => {
     messageText: messageText || null,
     caption: messageText || null,
     body: messageText || null,
+    hasPhoto: Boolean(message.hasPhoto),
     whatsappProcessingMode: groupPolicy.processingMode || 'caption_only',
     expectedCompanyCode: groupPolicy.companyCode || null,
     expectedCompanyId: groupPolicy.companyId || null,
@@ -58,6 +59,13 @@ module.exports = {
 
   async handleIncomingTextMessage({ message, reply }) {
     const messageMetadata = buildMessageMetadata(message);
+
+    if (!messageMetadata.hasPhoto) {
+      return {
+        ignored: true,
+        reason: 'message_without_photo',
+      };
+    }
 
     if (!hasPotentialInvoiceNumberInText(messageMetadata.messageText)) {
       return {

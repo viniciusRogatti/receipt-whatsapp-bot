@@ -306,6 +306,7 @@ const buildMessageContext = async (message, chat) => {
     messageText: messageText || null,
     caption: messageText || null,
     body: messageText || null,
+    hasPhoto: String(message.type || message._data?.type || '').toLowerCase() === 'image',
     whatsappProcessingMode: groupPolicy.processingMode || 'caption_only',
     expectedCompanyCode: groupPolicy.companyCode || null,
     expectedCompanyId: groupPolicy.companyId || null,
