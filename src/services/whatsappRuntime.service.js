@@ -466,34 +466,42 @@ const handleIncomingMedia = async (message, chat) => {
   const messageContext = await buildMessageContext(message, chat);
   let tempFilePath = null;
   try {
-    const media = await message.downloadMedia();
-    if (media?.data && String(media.mimetype || '').toLowerCase().startsWith('image/')) {
-      await ensureDir(env.receiptIngressTmpDir);
-      const extension = String(media.mimetype).toLowerCase().includes('png')
-        ? '.png'
-        : String(media.mimetype).toLowerCase().includes('webp') ? '.webp' : '.jpg';
-      tempFilePath = path.join(
-        env.receiptIngressTmpDir,
-        `whatsapp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`,
-      );
-      await fs.promises.writeFile(tempFilePath, Buffer.from(media.data, 'base64'));
-      messageContext.imagePath = tempFilePath;
-    }
-
+    // A baixa normal depende apenas da NF na legenda. Baixar a foto antes
+    // disso fazia uma falha temporária da mídia impedir o processamento.
     const result = await whatsappService.handleIncomingTextMessage({
       message: messageContext,
       reply: async (text) => replyIfEnabled(message, text),
     });
 
     if (
-      tempFilePath
       && result?.backendSync?.reason === 'invoice_not_found_from_message_text'
     ) {
-      await apiService.storeUnidentifiedReceiptEvidence({
-        imagePath: tempFilePath,
-        messageId: messageContext.id,
-        companyScope: { id: Number(messageContext.expectedCompanyId) || Number(messageContext.companyId) || null },
-      });
+      try {
+        const media = await message.downloadMedia();
+        if (media?.data && String(media.mimetype || '').toLowerCase().startsWith('image/')) {
+          await ensureDir(env.receiptIngressTmpDir);
+          const extension = String(media.mimetype).toLowerCase().includes('png')
+            ? '.png'
+            : String(media.mimetype).toLowerCase().includes('webp') ? '.webp' : '.jpg';
+          tempFilePath = path.join(
+            env.receiptIngressTmpDir,
+            `whatsapp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}${extension}`,
+          );
+          await fs.promises.writeFile(tempFilePath, Buffer.from(media.data, 'base64'));
+          await apiService.storeUnidentifiedReceiptEvidence({
+            imagePath: tempFilePath,
+            messageId: messageContext.id,
+            companyScope: { id: Number(messageContext.expectedCompanyId) || Number(messageContext.companyId) || null },
+          });
+        }
+      } catch (error) {
+        logger.warn('Nao foi possivel salvar a evidencia da foto sem NF identificada.', {
+          chatId: messageContext.chatId,
+          groupName: messageContext.groupName,
+          messageId: messageContext.id,
+          error: error.message,
+        });
+      }
     }
 
     if (result && result.ignored) {
