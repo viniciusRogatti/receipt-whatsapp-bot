@@ -72,9 +72,15 @@ const recoverWhatsappMessageById = async (client, messageId) => {
   const chatIdMatch = String(messageId || '').match(/^(?:true|false)_([^_]+)_/);
   const chatId = chatIdMatch ? chatIdMatch[1] : '';
   if (!chatId) return null;
-  const chat = await client.getChatById(chatId);
-  if (!chat || typeof chat.fetchMessages !== 'function') return null;
-  const messages = await chat.fetchMessages({ limit: 500 });
+  let chat = null;
+  let messages = [];
+  try {
+    chat = await client.getChatById(chatId);
+    if (!chat || typeof chat.fetchMessages !== 'function') return null;
+    messages = await chat.fetchMessages({ limit: 500 });
+  } catch (error) {
+    throw new Error(`Falha ao carregar historico do grupo: ${String(error?.message || error || 'erro desconhecido')}`);
+  }
   return messages.find((message) => (
     String(message?.id?._serialized || message?.id || '') === messageId
   )) || null;
@@ -96,7 +102,13 @@ const processPendingReceiptCorrections = async (client) => {
         const message = await recoverWhatsappMessageById(client, messageId);
         if (!message || !message.hasMedia) throw new Error('A mensagem original nao possui mais uma foto recuperavel.');
         // eslint-disable-next-line no-await-in-loop
-        const media = await message.downloadMedia();
+        let media = null;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          media = await message.downloadMedia();
+        } catch (error) {
+          throw new Error(`Falha ao baixar a foto original: ${String(error?.message || error || 'erro desconhecido')}`);
+        }
         if (!media?.data || !String(media.mimetype || '').toLowerCase().startsWith('image/')) {
           throw new Error('A midia original nao e uma imagem valida.');
         }
