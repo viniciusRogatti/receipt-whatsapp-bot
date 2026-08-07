@@ -226,7 +226,7 @@ const loadBackendContext = async () => {
       TripNote: models.TripNote,
       Trips: models.Trips,
       AlertsService: backendRequire('./src/services/AlertsService'),
-      DanfesService: backendRequire('./src/services/DanfesService'),
+      ReceiptBotService: backendRequire('./src/services/ReceiptBotService'),
       ReceiptWhatsappActivityService: backendRequire('./src/services/ReceiptWhatsappActivityService'),
       ReceiptsService: backendRequire('./src/services/ReceiptsService'),
     };
@@ -1006,24 +1006,25 @@ const updateInvoiceStatusInBackend = async (invoiceNumber, payload = {}, company
     };
   }
 
-  const { DanfesService } = await loadBackendContext();
+  const { ReceiptBotService } = await loadBackendContext();
   const actor = buildSystemActor(companyScope);
   const deliveryStatus = normalizeText(payload.deliveryStatus || 'delivered').toLowerCase() || 'delivered';
 
-  await DanfesService.updateDanfesStatus([{
-    invoice_number: key,
+  const result = await ReceiptBotService.updateInvoiceStatus({
+    invoiceNumber: key,
     status: deliveryStatus,
-  }], actor);
+    sourceMessageId: payload.sourceMessageId || payload.source_message_id || null,
+  }, actor);
 
-  return {
+  return Object.assign({}, result && typeof result === 'object' ? result : {}, {
     updated: true,
     mode: 'backend_service',
-    invoice: {
+    invoice: result && result.invoice ? result.invoice : {
       invoiceNumber: key,
       deliveryStatus,
       updatedAt: new Date().toISOString(),
     },
-  };
+  });
 };
 
 const updateInvoiceStatusInBackendApi = async (invoiceNumber, payload = {}, companyScope = null) => {
@@ -1042,6 +1043,7 @@ const updateInvoiceStatusInBackendApi = async (invoiceNumber, payload = {}, comp
     body: {
       invoiceNumber: key,
       status: deliveryStatus,
+      sourceMessageId: payload.sourceMessageId || payload.source_message_id || null,
     },
     companyScope,
   });
@@ -1650,6 +1652,9 @@ module.exports = {
       companyScope: payload.companyScope || null,
     });
     const companyScope = payload.companyScope || await resolveCompanyScopeFromLookup(lookup);
+    metadata.expectedCompanyId = metadata.expectedCompanyId || companyScope.id || null;
+    metadata.expectedCompanyCode = metadata.expectedCompanyCode || companyScope.code || null;
+    metadata.expectedCompanyName = metadata.expectedCompanyName || companyScope.name || null;
     const deliveryContext = payload.deliveryContext
       ? normalizeDeliveryContext(payload.deliveryContext)
       : (
@@ -1920,13 +1925,6 @@ module.exports = {
           mode: resolveBackendTransportMode(),
           reason: 'sync_mode_status_only',
         };
-      const update = isRemoteBackendApiEnabled()
-        ? await updateInvoiceStatusInBackendApi(syncAction.invoiceNumber, {
-          deliveryStatus: 'delivered',
-        }, companyScope)
-        : await updateInvoiceStatusInBackend(syncAction.invoiceNumber, {
-          deliveryStatus: 'delivered',
-        }, companyScope);
       const activity = await this.recordWhatsappSuccessActivity({
         invoiceNumber: syncAction.invoiceNumber,
         lookup,
@@ -1954,6 +1952,16 @@ module.exports = {
             originalClassification: promotedFromReview ? normalizeClassification(analysis) : null,
           }),
       });
+      const sourceMessageId = effectiveMetadata && effectiveMetadata.messageId;
+      const update = isRemoteBackendApiEnabled()
+        ? await updateInvoiceStatusInBackendApi(syncAction.invoiceNumber, {
+          deliveryStatus: 'delivered',
+          sourceMessageId,
+        }, companyScope)
+        : await updateInvoiceStatusInBackend(syncAction.invoiceNumber, {
+          deliveryStatus: 'delivered',
+          sourceMessageId,
+        }, companyScope);
 
       return {
         mode: syncMode,

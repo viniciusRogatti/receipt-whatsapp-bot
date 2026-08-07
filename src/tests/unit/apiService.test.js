@@ -404,14 +404,14 @@ module.exports = () => {
           assert.strictEqual(result.action, 'mark_invoice_delivered');
           assert.strictEqual(requests.length, 3);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721731');
-          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/status');
-          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/danfes/status');
 
-          const statusBody = JSON.parse(requests[1].options.body);
+          const statusBody = JSON.parse(requests[2].options.body);
           assert.strictEqual(statusBody.invoiceNumber, '1721731');
           assert.strictEqual(statusBody.status, 'delivered');
 
-          const activityBody = JSON.parse(requests[2].options.body);
+          const activityBody = JSON.parse(requests[1].options.body);
           assert.strictEqual(activityBody.tripId, 65);
           assert.strictEqual(activityBody.tripNoteId, 731);
           assert.strictEqual(activityBody.driverId, null);
@@ -520,14 +520,14 @@ module.exports = () => {
           assert.strictEqual(result.promotedFromReview, true);
           assert.strictEqual(requests.length, 3);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721769');
-          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/status');
-          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/danfes/status');
 
-          const statusBody = JSON.parse(requests[1].options.body);
+          const statusBody = JSON.parse(requests[2].options.body);
           assert.strictEqual(statusBody.invoiceNumber, '1721769');
           assert.strictEqual(statusBody.status, 'delivered');
 
-          const activityBody = JSON.parse(requests[2].options.body);
+          const activityBody = JSON.parse(requests[1].options.body);
           assert.strictEqual(activityBody.invoiceNumber, '1721769');
           assert.strictEqual(activityBody.classification, 'valid');
           assert.strictEqual(activityBody.tripId, 62);
@@ -673,14 +673,14 @@ module.exports = () => {
           assert.strictEqual(requests.length, 4);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/2010316');
           assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721192');
-          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/danfes/status');
-          assert.strictEqual(requests[3].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[3].url, 'https://backend.example/api/receipt-bot/danfes/status');
 
-          const statusBody = JSON.parse(requests[2].options.body);
+          const statusBody = JSON.parse(requests[3].options.body);
           assert.strictEqual(statusBody.invoiceNumber, '1721192');
           assert.strictEqual(statusBody.status, 'delivered');
 
-          const activityBody = JSON.parse(requests[3].options.body);
+          const activityBody = JSON.parse(requests[2].options.body);
           assert.strictEqual(activityBody.invoiceNumber, '1721192');
           assert.strictEqual(activityBody.classification, 'valid');
           assert.strictEqual(activityBody.tripId, 60);
@@ -833,14 +833,14 @@ module.exports = () => {
           assert.strictEqual(result.promotedFromReview, false);
           assert.strictEqual(requests.length, 3);
           assert.strictEqual(requests[0].url, 'https://backend.example/api/receipt-bot/danfes/nf/1721192');
-          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/danfes/status');
-          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[1].url, 'https://backend.example/api/receipt-bot/whatsapp-success-activity');
+          assert.strictEqual(requests[2].url, 'https://backend.example/api/receipt-bot/danfes/status');
 
-          const statusBody = JSON.parse(requests[1].options.body);
+          const statusBody = JSON.parse(requests[2].options.body);
           assert.strictEqual(statusBody.invoiceNumber, '1721192');
           assert.strictEqual(statusBody.status, 'delivered');
 
-          const activityBody = JSON.parse(requests[2].options.body);
+          const activityBody = JSON.parse(requests[1].options.body);
           assert.strictEqual(activityBody.invoiceNumber, '1721192');
           assert.strictEqual(activityBody.classification, 'valid');
           assert.strictEqual(activityBody.metadata.promotedFromReview, false);
@@ -985,10 +985,10 @@ module.exports = () => {
           assert.strictEqual(requests[3].options.headers['x-company-id'], '3');
           assert.strictEqual(requests[4].options.headers['x-company-id'], '3');
 
-          const statusBody = JSON.parse(requests[3].options.body);
+          const statusBody = JSON.parse(requests[4].options.body);
           assert.strictEqual(statusBody.invoiceNumber, '6284');
 
-          const activityBody = JSON.parse(requests[4].options.body);
+          const activityBody = JSON.parse(requests[3].options.body);
           assert.strictEqual(activityBody.invoiceNumber, '6284');
           assert.strictEqual(activityBody.metadata.messageTextInvoiceNumber, '6284');
           assert.deepStrictEqual(activityBody.metadata.messageTextCandidates, ['00006284', '6284']);
