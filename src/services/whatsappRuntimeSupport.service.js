@@ -61,6 +61,42 @@ const resolveMediaFileName = ({ mimeType, originalFileName = '', messageId = '' 
   return `${stem}${extension}`;
 };
 
+const normalizeMessageIdCandidate = (value) => {
+  if (typeof value === 'string' || typeof value === 'number') {
+    const normalized = normalizeText(value);
+    if (!normalized || ['[object Object]', 'undefined', 'null'].includes(normalized)) return '';
+    return normalized;
+  }
+
+  return '';
+};
+
+const resolveWhatsappMessageId = (message = {}) => {
+  const serializedId = [
+    message.id?._serialized,
+    message._data?.id?._serialized,
+  ]
+    .map(normalizeMessageIdCandidate)
+    .find(Boolean);
+
+  if (serializedId) return serializedId;
+
+  const rawId = [
+    message.id?.id,
+    message._data?.id?.id,
+    message.mediaId,
+  ]
+    .map(normalizeMessageIdCandidate)
+    .find(Boolean);
+
+  if (!rawId) return '';
+
+  const groupId = normalizeMessageIdCandidate(
+    message.from || message.groupId || message.chatId,
+  );
+  return groupId ? `whatsapp:${groupId}:${rawId}` : `whatsapp:${rawId}`;
+};
+
 const parseTextCommand = ({ body = '', prefix = '!recibo' }) => {
   const normalizedPrefix = normalizeText(prefix);
   const normalizedBody = normalizeText(body);
@@ -124,6 +160,7 @@ module.exports = {
   isGroupMessage,
   isImageMimeType,
   parseTextCommand,
+  resolveWhatsappMessageId,
   resolveWhatsappGroupPolicy,
   resolveMediaFileName,
 };

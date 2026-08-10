@@ -11,6 +11,7 @@ const {
   isGroupAllowed,
   isGroupMessage,
   parseTextCommand,
+  resolveWhatsappMessageId,
   resolveWhatsappGroupPolicy,
 } = require('./whatsappRuntimeSupport.service');
 
@@ -299,7 +300,7 @@ const buildMessageContext = async (message, chat) => {
   });
 
   return {
-    id: message.id && message.id._serialized ? message.id._serialized : String(message.id || ''),
+    id: resolveWhatsappMessageId(message),
     companyId: env.receiptDefaultCompanyId,
     groupId: message.from,
     groupName: chat && chat.name ? chat.name : null,

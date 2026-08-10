@@ -3,6 +3,7 @@ const {
   isGroupAllowed,
   parseTextCommand,
   resolveWhatsappGroupPolicy,
+  resolveWhatsappMessageId,
   resolveMediaFileName,
 } = require('../../services/whatsappRuntimeSupport.service');
 
@@ -57,6 +58,51 @@ module.exports = () => {
         });
 
         assert.strictEqual(fileName, 'ABCD_123.webp');
+      },
+    },
+    {
+      name: 'whatsappRuntimeSupport preserva o id serializado fornecido pelo WhatsApp',
+      run: () => {
+        assert.strictEqual(resolveWhatsappMessageId({
+          id: { _serialized: 'false_5511999999999@g.us_ABC123' },
+          from: '5511999999999@g.us',
+        }), 'false_5511999999999@g.us_ABC123');
+      },
+    },
+    {
+      name: 'whatsappRuntimeSupport monta id estavel quando o MessageId nao expoe _serialized',
+      run: () => {
+        assert.strictEqual(resolveWhatsappMessageId({
+          id: { fromMe: false, remote: '5511999999999@g.us', id: 'ABC123' },
+          from: '5511999999999@g.us',
+        }), 'whatsapp:5511999999999@g.us:ABC123');
+      },
+    },
+    {
+      name: 'whatsappRuntimeSupport usa o id interno da midia sem converter objeto em texto',
+      run: () => {
+        assert.strictEqual(resolveWhatsappMessageId({
+          id: { fromMe: false },
+          _data: { id: { id: 'MEDIA456' } },
+          from: '5511999999999@g.us',
+        }), 'whatsapp:5511999999999@g.us:MEDIA456');
+        assert.notStrictEqual(resolveWhatsappMessageId({ id: {} }), '[object Object]');
+      },
+    },
+    {
+      name: 'whatsappRuntimeSupport diferencia fotos simultaneas e mantem repeticao idempotente',
+      run: () => {
+        const first = {
+          id: { id: 'PHOTO-A' },
+          from: '5511999999999@g.us',
+        };
+        const second = {
+          id: { id: 'PHOTO-B' },
+          from: '5511999999999@g.us',
+        };
+
+        assert.notStrictEqual(resolveWhatsappMessageId(first), resolveWhatsappMessageId(second));
+        assert.strictEqual(resolveWhatsappMessageId(first), resolveWhatsappMessageId(first));
       },
     },
     {
