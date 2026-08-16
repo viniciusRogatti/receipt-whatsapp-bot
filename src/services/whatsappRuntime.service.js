@@ -450,6 +450,13 @@ module.exports = {
     if (activeClient) return activeClient;
 
     await ensureDir(env.whatsappSessionDir);
+    const centralizedPolicies = await require('./api.service').getWhatsappGroupPolicies().catch((error) => {
+      logger.warn('Nao foi possivel atualizar os grupos pelo backend; usando a ultima configuracao local.', { error: error.message });
+      return null;
+    });
+    if (centralizedPolicies?.policies && Object.keys(centralizedPolicies.policies).length) {
+      env.whatsappGroupPolicies = centralizedPolicies.policies;
+    }
     await cleanupStaleSessionArtifacts();
     restartScheduled = false;
     clearHealthcheck();

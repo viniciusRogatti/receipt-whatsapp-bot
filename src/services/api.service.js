@@ -1261,6 +1261,10 @@ const importRecoveredReceiptInBackend = async ({ invoiceNumber, imagePath, compa
 };
 
 module.exports = {
+  async getWhatsappGroupPolicies() {
+    if (!isRemoteBackendApiEnabled()) return null;
+    return requestBackendApi('/api/receipt-bot/whatsapp-groups');
+  },
   async storeUnidentifiedReceiptEvidence({ imagePath, messageId, companyScope = null }) {
     if (!isRemoteBackendApiEnabled() || !imagePath || !normalizeText(messageId)) {
       return { stored: false, skipped: true };
