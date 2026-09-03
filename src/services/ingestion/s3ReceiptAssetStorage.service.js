@@ -81,7 +81,12 @@ module.exports = {
       if (upload && upload.path) {
         buffer = await fs.promises.readFile(upload.path);
       } else if (imageUrl) {
-        const remoteAsset = await readRemoteAsset(imageUrl, env.receiptRemoteAssetTimeoutMs);
+        const remoteAsset = await readRemoteAsset(
+          imageUrl,
+          env.receiptRemoteAssetTimeoutMs,
+          env.receiptApiMaxFileBytes,
+          env.receiptRemoteAssetAllowedHosts,
+        );
         buffer = remoteAsset.buffer;
         contentType = remoteAsset.mimeType;
       }

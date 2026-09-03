@@ -29,25 +29,58 @@ const guessExtension = (sourcePath, originalName, mimeType) => {
   return candidates[0] || '.jpg';
 };
 
-const readRemoteAsset = async (imageUrl, timeoutMs) => {
+const validateRemoteAssetUrl = (imageUrl, allowedHosts = []) => {
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(String(imageUrl || '').trim());
+  } catch {
+    throw new Error('URL da imagem remota invalida.');
+  }
+
+  const normalizedAllowedHosts = new Set((allowedHosts || []).map((host) => String(host || '').trim().toLowerCase()).filter(Boolean));
+  if (parsedUrl.protocol !== 'https:' || !normalizedAllowedHosts.has(parsedUrl.hostname.toLowerCase())) {
+    throw new Error('Host da imagem remota nao autorizado.');
+  }
+  return parsedUrl.toString();
+};
+
+const readRemoteAsset = async (imageUrl, timeoutMs, maxBytes, allowedHosts = []) => {
+  const validatedUrl = validateRemoteAssetUrl(imageUrl, allowedHosts);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(imageUrl, {
+    const response = await fetch(validatedUrl, {
       method: 'GET',
       signal: controller.signal,
+      redirect: 'error',
     });
 
     if (!response.ok) {
       throw new Error(`Falha ao baixar imagem remota (${response.status}).`);
     }
 
-    const arrayBuffer = await response.arrayBuffer();
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength > maxBytes) {
+      throw new Error('Imagem remota excede o tamanho maximo permitido.');
+    }
+
+    const chunks = [];
+    let receivedBytes = 0;
+    for await (const chunk of response.body) {
+      const buffer = Buffer.from(chunk);
+      receivedBytes += buffer.length;
+      if (receivedBytes > maxBytes) {
+        controller.abort();
+        throw new Error('Imagem remota excede o tamanho maximo permitido.');
+      }
+      chunks.push(buffer);
+    }
+    const buffer = Buffer.concat(chunks);
     return {
-      buffer: Buffer.from(arrayBuffer),
+      buffer,
       mimeType: response.headers.get('content-type') || null,
-      sizeBytes: Number(response.headers.get('content-length') || 0) || null,
+      sizeBytes: buffer.length,
     };
   } finally {
     clearTimeout(timeout);
@@ -109,4 +142,5 @@ module.exports = {
   guessExtension,
   materializeBufferToTempFile,
   readRemoteAsset,
+  validateRemoteAssetUrl,
 };

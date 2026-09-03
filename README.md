@@ -233,7 +233,10 @@ Variaveis principais:
 - `RECEIPT_S3_PUBLIC_BASE_URL`: URL publica base opcional
 - `RECEIPT_MAINTENANCE_INTERVAL_MS`: janela da rotina de limpeza automatica
 - `RECEIPT_REMOTE_ASSET_TIMEOUT_MS`: timeout generico para baixar uma imagem remota na API de ingestao
+- `RECEIPT_REMOTE_ASSET_ALLOWED_HOSTS`: lista explicita de hosts HTTPS autorizados para `imageUrl`; vazio bloqueia downloads remotos
 - `RECEIPT_COMPANY_INGEST_TOKENS`: mapa JSON de tokens por empresa
+- `RECEIPT_API_MAX_FILE_BYTES`: tamanho maximo da imagem recebida pela API (padrao de 12 MB)
+- `RECEIPT_API_RATE_LIMIT_WINDOW_MS` e `RECEIPT_API_RATE_LIMIT_MAX`: janela e limite de requisicoes por origem
 - `RECEIPT_DEFAULT_COMPANY_ID`: empresa padrao do endpoint central
 - `RECEIPT_DEFAULT_SOURCE_ID`: origem padrao do endpoint central
 - `RECEIPT_DEFAULT_DOCUMENT_TYPE`: documento padrao do endpoint central
@@ -353,6 +356,8 @@ API padrao:
 
 - `http://localhost:3390/health`
 - `POST /v1/receipts/ingest`
+
+Os endpoints em `/v1` exigem uma credencial configurada em `RECEIPT_COMPANY_INGEST_TOKENS`, enviada como `Authorization: Bearer`, `x-ingest-token`, `x-api-key` ou `x-company-token`. A empresa e determinada pela credencial; valores de `companyId` enviados pelo cliente nao substituem esse escopo.
 - `POST /v1/sources/whatsapp/receipts`
 - `GET /v1/receipts/jobs/:jobId`
 

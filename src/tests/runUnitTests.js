@@ -24,6 +24,7 @@ const testModules = [
   require('./unit/documentExtractionOrchestrator.test'),
   require('./unit/processingStateRepository.test'),
   require('./unit/receiptAssetStorage.test'),
+  require('./unit/receiptHttpSecurity.test'),
 ];
 
 async function main() {

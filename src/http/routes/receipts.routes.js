@@ -2,11 +2,21 @@ const express = require('express');
 const fs = require('fs');
 const multer = require('multer');
 const path = require('path');
+const { rateLimit } = require('express-rate-limit');
 const env = require('../../config/env');
 const ingestionService = require('../../services/ingestion/receiptIngestion.service');
 const jobQueueService = require('../../services/queue/jobQueue.service');
 const processingStateRepository = require('../../services/state/processingStateRepository.service');
 const { ensureDir } = require('../../utils/file');
+const profileResolver = require('../../services/processing/profileResolver.service');
+
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/bmp',
+  'image/tiff',
+]);
 
 const parseMetadataField = (metadata) => {
   if (!metadata) return {};
@@ -20,7 +30,7 @@ const parseMetadataField = (metadata) => {
 };
 
 const buildPayloadFromRequest = (req) => ({
-  companyId: req.body.companyId,
+  companyId: req.receiptApiCompanyId,
   source: req.body.source,
   documentType: req.body.documentType,
   imageUrl: req.body.imageUrl,
@@ -41,6 +51,40 @@ const cleanupTempUpload = async (file) => {
   await fs.promises.unlink(file.path).catch(() => undefined);
 };
 
+const authorizeReceiptApi = (req, res, next) => {
+  const companyId = profileResolver.resolveCompanyIdFromCredentials({ headers: req.headers });
+  if (!companyId) {
+    return res.status(401).json({ error: 'INVALID_INGEST_CREDENTIALS' });
+  }
+
+  req.receiptApiCompanyId = companyId;
+  return next();
+};
+
+const receiptApiRateLimiter = rateLimit({
+  windowMs: env.receiptApiRateLimitWindowMs,
+  limit: env.receiptApiRateLimitMax,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'RECEIPT_INGEST_RATE_LIMITED' },
+});
+
+const sendUploadError = async (error, req, res, next) => {
+  if (!error) return next();
+  await cleanupTempUpload(req.file);
+
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'RECEIPT_FILE_TOO_LARGE' });
+  }
+  if (error instanceof multer.MulterError) {
+    return res.status(400).json({ error: error.code || 'INVALID_RECEIPT_UPLOAD' });
+  }
+  if (error.code === 'INVALID_RECEIPT_MIME_TYPE') {
+    return res.status(415).json({ error: error.code });
+  }
+  return next(error);
+};
+
 const createRouter = () => {
   const router = express.Router();
 
@@ -54,9 +98,27 @@ const createRouter = () => {
         callback(null, fileName);
       },
     }),
+    limits: {
+      fileSize: env.receiptApiMaxFileBytes,
+      files: 1,
+      fields: 8,
+      parts: 10,
+      fieldSize: 1024 * 1024,
+    },
+    fileFilter: (_req, file, callback) => {
+      if (ALLOWED_IMAGE_MIME_TYPES.has(String(file.mimetype || '').toLowerCase())) {
+        return callback(null, true);
+      }
+      const error = new Error('Tipo de arquivo nao suportado.');
+      error.code = 'INVALID_RECEIPT_MIME_TYPE';
+      return callback(error);
+    },
   });
+  const receiveImage = (req, res, next) => upload.single('image')(req, res, (error) => (
+    sendUploadError(error, req, res, next)
+  ));
 
-  router.post('/receipts/ingest', upload.single('image'), async (req, res) => {
+  router.post('/receipts/ingest', authorizeReceiptApi, receiptApiRateLimiter, receiveImage, async (req, res) => {
     try {
       const result = await ingestionService.ingestReceipt({
         payload: buildPayloadFromRequest(req),
@@ -75,7 +137,7 @@ const createRouter = () => {
     }
   });
 
-  router.post('/sources/whatsapp/receipts', upload.single('image'), async (req, res) => {
+  router.post('/sources/whatsapp/receipts', authorizeReceiptApi, receiptApiRateLimiter, receiveImage, async (req, res) => {
     try {
       const result = await ingestionService.ingestReceipt({
         payload: buildPayloadFromRequest(req),
@@ -95,9 +157,9 @@ const createRouter = () => {
     }
   });
 
-  router.get('/receipts/jobs/:jobId', async (req, res) => {
+  router.get('/receipts/jobs/:jobId', authorizeReceiptApi, receiptApiRateLimiter, async (req, res) => {
     const job = await processingStateRepository.getJob(req.params.jobId);
-    if (!job) {
+    if (!job || String(job.companyId || '') !== String(req.receiptApiCompanyId || '')) {
       return res.status(404).json({
         error: 'Job nao encontrado.',
       });
@@ -114,3 +176,6 @@ const createRouter = () => {
 };
 
 module.exports = createRouter;
+module.exports.authorizeReceiptApi = authorizeReceiptApi;
+module.exports.receiptApiRateLimiter = receiptApiRateLimiter;
+module.exports.__testables = { buildPayloadFromRequest };

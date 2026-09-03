@@ -1,4 +1,5 @@
 const env = require('../../config/env');
+const crypto = require('crypto');
 const {
   DEFAULT_COMPANY_ID,
   DEFAULT_DOCUMENT_TYPE,
@@ -66,6 +67,14 @@ const extractCredentialCandidates = (headers = {}) => {
     .filter(Boolean);
 };
 
+const credentialsMatch = (left, right) => {
+  const leftBuffer = Buffer.from(String(left || '').trim());
+  const rightBuffer = Buffer.from(String(right || '').trim());
+  return leftBuffer.length > 0
+    && leftBuffer.length === rightBuffer.length
+    && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+};
+
 const resolveCompanyIdFromCredentials = ({ headers = {} }) => {
   const candidates = extractCredentialCandidates(headers);
   if (!candidates.length) return null;
@@ -75,7 +84,7 @@ const resolveCompanyIdFromCredentials = ({ headers = {} }) => {
 
   for (const candidate of candidates) {
     const matchedEntry = entries.find(([, tokens]) => (
-      Array.isArray(tokens) && tokens.some((token) => String(token || '').trim() === candidate)
+      Array.isArray(tokens) && tokens.some((token) => credentialsMatch(token, candidate))
     ));
 
     if (matchedEntry) return matchedEntry[0];
@@ -158,5 +167,6 @@ module.exports = {
     resolveCompanyIdFromCredentials,
   },
   buildCanonicalReceiptRequest,
+  resolveCompanyIdFromCredentials,
   resolveReceiptProcessingContext,
 };

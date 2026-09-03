@@ -3,6 +3,7 @@ const createReceiptsRouter = require('./routes/receipts.routes');
 
 const createApp = () => {
   const app = express();
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '4mb' }));
 
   app.get('/health', (_req, res) => {
