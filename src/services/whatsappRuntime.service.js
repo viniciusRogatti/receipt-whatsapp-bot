@@ -6,6 +6,7 @@ const env = require('../config/env');
 const logger = require('../utils/logger');
 const { ensureDir } = require('../utils/file');
 const whatsappService = require('./whatsapp.service');
+const { withDownloadedPhoto } = require('./whatsappMedia.service');
 const whatsappConnectionStateService = require('./whatsappConnectionState.service');
 const {
   isGroupAllowed,
@@ -353,10 +354,10 @@ const handleTextCommand = async (message) => {
 
 const handleIncomingMedia = async (message, chat) => {
   const messageContext = await buildMessageContext(message, chat);
-  const result = await whatsappService.handleIncomingTextMessage({
-    message: messageContext,
+  const result = await withDownloadedPhoto(message, (imagePath) => whatsappService.handleIncomingTextMessage({
+    message: { ...messageContext, imagePath },
     reply: async (text) => replyIfEnabled(message, text),
-  });
+  }));
 
   if (result && result.ignored) {
     logger.debug('Midia ignorada porque o texto/caption nao trouxe NF candidata.', {
