@@ -10,11 +10,7 @@ const hasPotentialInvoiceNumberInText = (value) => {
   const messageText = normalizeMessageText(value);
   if (!messageText) return false;
 
-  const digitGroups = messageText.match(/\d+/g) || [];
-  return digitGroups.some((digits) => {
-    const length = String(digits || '').length;
-    return length >= 3 && length <= 12;
-  });
+  return /\d{3,9}/.test(messageText) || (/^[\d\s.,/\\-]+$/.test(messageText) && /\d/.test(messageText));
 };
 
 const buildMessageMetadata = (message = {}) => {
@@ -78,6 +74,8 @@ module.exports = {
       imagePath: message.imagePath || null,
       metadata: messageMetadata,
     });
+
+    if (backendSync?.ignored) return { ignored: true, reason: backendSync.reason, backendSync };
 
     let replied = false;
     const replyMessage = backendSync && backendSync.replyMessage ? backendSync.replyMessage : null;

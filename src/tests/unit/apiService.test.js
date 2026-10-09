@@ -968,9 +968,10 @@ module.exports = () => {
               groupName: 'Canhotos Pronto',
               messageId: 'wamid-pronto-1',
               senderName: 'Motorista 1',
-              messageText: 'NF 00006284',
-              caption: 'NF 00006284',
-              body: 'NF 00006284',
+              hasPhoto: true,
+              messageText: '00006284',
+              caption: '00006284',
+              body: '00006284',
               expectedCompanyCode: 'pronto',
               expectedCompanyId: 3,
               expectedCompanyName: 'PRONTO',
@@ -978,20 +979,19 @@ module.exports = () => {
           });
 
           assert.strictEqual(result.action, 'mark_invoice_delivered');
-          assert.strictEqual(requests.length, 5);
+          assert.strictEqual(requests.length, 4);
           assert.strictEqual(requests[0].options.headers['x-company-id'], '3');
           assert.strictEqual(requests[1].options.headers['x-company-id'], '3');
           assert.strictEqual(requests[2].options.headers['x-company-id'], '3');
           assert.strictEqual(requests[3].options.headers['x-company-id'], '3');
-          assert.strictEqual(requests[4].options.headers['x-company-id'], '3');
 
-          const statusBody = JSON.parse(requests[4].options.body);
+          const statusBody = JSON.parse(requests[3].options.body);
           assert.strictEqual(statusBody.invoiceNumber, '6284');
 
-          const activityBody = JSON.parse(requests[3].options.body);
+          const activityBody = JSON.parse(requests[2].options.body);
           assert.strictEqual(activityBody.invoiceNumber, '6284');
           assert.strictEqual(activityBody.metadata.messageTextInvoiceNumber, '6284');
-          assert.deepStrictEqual(activityBody.metadata.messageTextCandidates, ['00006284', '6284']);
+          assert.deepStrictEqual(activityBody.metadata.messageTextCandidates, ['6284']);
         } finally {
           env.receiptBackendApiBaseUrl = originalBackendApiBaseUrl;
           env.receiptBackendApiToken = originalBackendApiToken;
@@ -1114,9 +1114,10 @@ module.exports = () => {
               groupName: 'Canhotos Pronto',
               messageId: 'wamid-pronto-2',
               senderName: 'Motorista 2',
-              messageText: 'NF 00006284',
-              caption: 'NF 00006284',
-              body: 'NF 00006284',
+              hasPhoto: true,
+              messageText: '00006284',
+              caption: '00006284',
+              body: '00006284',
               expectedCompanyCode: 'pronto',
               expectedCompanyId: 3,
               expectedCompanyName: 'PRONTO',

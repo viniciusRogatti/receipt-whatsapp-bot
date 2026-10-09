@@ -1,3 +1,4 @@
+const { parseWhatsappCaption } = require('../utils/whatsappCaption');
 const fs = require('fs');
 const path = require('path');
 const { createRequire } = require('module');
@@ -412,6 +413,7 @@ const findInvoiceInBackendDb = async (invoiceNumber, companyScopeHint = null) =>
         companyId: Number(invoice.company_id),
         status: invoice.status,
         invoiceDate: invoice.invoice_date,
+        createdAt: invoice.created_at,
         loadNumber: invoice.load_number,
         barcode: invoice.barcode,
         totalValue: invoice.total_value,
@@ -2012,11 +2014,11 @@ module.exports = {
       expectedCompanyId: expectedCompanyScope && expectedCompanyScope.id ? expectedCompanyScope.id : null,
       expectedCompanyName: expectedCompanyLabel,
     });
-    const invoiceCandidates = collectInvoiceCandidatesFromMessageText(normalizedMetadata, {
-      expectedLengths: [],
-      allowRawAnyLength: true,
-      allowTrimmedLeadingZeros: true,
-    });
+    if (normalizedMetadata.hasPhoto !== true) return { ignored: true, action: 'none', reason: 'message_without_photo' };
+    const caption = parseWhatsappCaption(normalizedMetadata.messageText || normalizedMetadata.caption || normalizedMetadata.body);
+    if (!caption.valid && !caption.malformedNumber) return { ignored: true, action: 'none', reason: 'caption_contains_extra_text' };
+    const invoiceCandidates = caption.valid ? [caption.invoiceNumber] : [];
+
 
     const createTextAlert = async ({
       code,
@@ -2051,13 +2053,13 @@ module.exports = {
       };
     };
 
-    if (!invoiceCandidates.length) {
+    if (!caption.valid) {
       return createTextAlert({
         code: 'RECEIPT_NF_NOT_DETECTED',
-        title: `Nao foi possivel identificar a NF no grupo ${normalizedMetadata.groupName || 'desconhecido'}`,
-        message: `A foto foi enviada no grupo ${normalizedMetadata.groupName || 'desconhecido'}, mas a legenda nao trouxe uma NF valida para ${expectedCompanyLabel}.`,
-        reason: 'message_text_nf_not_detected',
-        replyMessage: 'Nao consegui identificar a NF no texto enviado junto com a foto. Reenvie informando a NF.',
+        title: 'Legenda fora do padrão',
+        message: 'A foto não foi usada para dar baixa. Publique novamente com somente os dígitos da NF, sem espaços entre eles, pontos ou outros caracteres.',
+        reason: 'invalid_invoice_caption',
+        extraMetadata: { captionRejected: true, requiresNewPhoto: true },
       });
     }
 
@@ -2081,6 +2083,17 @@ module.exports = {
 
     if (expectedMatches.length === 1) {
       const matched = expectedMatches[0];
+      const createdAt = matched.lookup?.invoice?.createdAt || matched.lookup?.invoice?.created_at;
+      const rawPostedAt = normalizedMetadata.messageTimestamp;
+      const postedAt = typeof rawPostedAt === 'number' && rawPostedAt < 10000000000 ? rawPostedAt * 1000 : rawPostedAt;
+      if (createdAt && postedAt && new Date(postedAt).getTime() < new Date(createdAt).getTime()) {
+        return createTextAlert({
+          code: 'NF_NOT_FOUND_UPLOAD_ATTEMPT', title: 'Foto anterior à entrada da NF',
+          message: 'Esta postagem é anterior à importação da NF. Publique uma nova foto com somente o número da NF.',
+          invoiceNumber: matched.invoiceNumber, reason: 'photo_before_invoice_import',
+          extraMetadata: { requiresNewPhoto: true, ignoredBeforeInvoiceImport: true },
+        });
+      }
       return this.syncAnalysisResult(buildTextOnlyWhatsappAnalysis({
         invoiceNumber: matched.invoiceNumber,
         messageTextCandidates: invoiceCandidates,
@@ -2168,7 +2181,8 @@ module.exports = {
       message: `Nenhuma das NFs informadas na legenda (${invoiceCandidates.join(', ')}) foi encontrada na base operacional de ${expectedCompanyLabel}.`,
       invoiceNumber: invoiceCandidates[0] || null,
       reason: 'invoice_not_found_from_message_text',
-      replyMessage: 'Nao encontrei a NF informada na base operacional. Confira o numero e tente novamente.',
+      replyMessage: 'NF não encontrada. Após conferir o número e importar o XML, publique novamente a foto com somente o número da NF.',
+      extraMetadata: { requiresNewPhoto: true, ignoredBeforeInvoiceImport: true },
     });
   },
 

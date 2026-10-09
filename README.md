@@ -1,5 +1,12 @@
 # Receipt WhatsApp Bot
 
+## Regra operacional vigente — KP Transportes (12/09/2026)
+
+WhatsApp usa somente foto + dígitos contínuos da NF na legenda. Texto adicional é ignorado; espaços/pontuação dentro do número geram alerta sem baixa. A NF precisa existir quando a foto foi postada: importar XML depois não autoriza reutilizar a mensagem antiga. Exigir nova postagem. O histórico de alertas nunca comprova entrega. O fluxo operacional não usa OCR.
+
+Regras completas: [Central, alertas e bot](../../docs/central-alertas-e-paginas-de-apoio.md). As descrições de OCR e ingestão genérica abaixo documentam componentes legados/opcionais e não substituem essa regra operacional.
+
+
 Pipeline incremental em Node.js para leitura de canhotos com arquitetura preparada para:
 
 - aceitar imagens vindas de WhatsApp, app mobile, painel web, API e upload manual
