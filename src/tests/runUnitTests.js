@@ -19,6 +19,7 @@ const testModules = [
   require('./unit/whatsappRuntimeSupport.test'),
   require('./unit/whatsappService.test'),
   require('./unit/whatsappCaption.test'),
+  require('./unit/whatsappReadyRecovery.test'),
   require('./unit/whatsappMedia.test'),
   require('./unit/whatsappConnectionState.test'),
   require('./unit/fileJobQueue.test'),

@@ -477,6 +477,7 @@ module.exports = {
       }));
 
     const client = buildClient();
+    require('./whatsappReadyRecovery.service').installReadyRecovery(client, logger);
     activeClient = client;
 
     let startupSettled = false;
