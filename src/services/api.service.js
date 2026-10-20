@@ -1263,6 +1263,7 @@ const importRecoveredReceiptInBackend = async ({ invoiceNumber, imagePath, compa
 };
 
 module.exports = {
+  occurrenceOutboxRequest: (route, options = {}) => requestBackendApi('/api/receipt-bot/driver-occurrences' + route, options),
   async getWhatsappGroupPolicies() {
     if (!isRemoteBackendApiEnabled()) return null;
     return requestBackendApi('/api/receipt-bot/whatsapp-groups');
