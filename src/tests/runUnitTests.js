@@ -22,6 +22,8 @@ const testModules = [
   require('./unit/driverWhatsappOutbox.test'),
   require('./unit/whatsappReadyRecovery.test'),
   require('./unit/whatsappMedia.test'),
+  require('./unit/whatsappRecovery.test'),
+  require('./unit/whatsappRecoveryCommand.test'),
   require('./unit/whatsappConnectionState.test'),
   require('./unit/fileJobQueue.test'),
   require('./unit/documentFieldParser.test'),

@@ -1045,8 +1045,8 @@ module.exports = () => {
                 ok: true,
                 status: 200,
                 text: async () => JSON.stringify({
-                  found: false,
-                  reason: 'invoice_not_found',
+                  found: true,
+                  invoice: { invoiceNumber: '6284', companyId: 1 },
                   company: {
                     id: 3,
                     code: 'pronto',
@@ -1079,8 +1079,8 @@ module.exports = () => {
                 ok: true,
                 status: 200,
                 text: async () => JSON.stringify({
-                  found: false,
-                  reason: 'invoice_not_found',
+                  found: true,
+                  invoice: { invoiceNumber: '6284', companyId: 1 },
                   company: {
                     id: 2,
                     code: 'brazilian_fish',
@@ -1126,6 +1126,7 @@ module.exports = () => {
 
           assert.strictEqual(result.action, 'create_receipt_alert');
           assert.strictEqual(result.reason, 'group_company_mismatch');
+          assert.ok(requests.every(({ url }) => !/whatsapp-success-activity|danfes\/status|recovered-receipts/.test(url)));
           const alertRequest = requests.find((entry) => entry.url.endsWith('/api/receipt-bot/alerts'));
           assert.ok(alertRequest);
           assert.strictEqual(alertRequest.options.headers['x-company-id'], '3');

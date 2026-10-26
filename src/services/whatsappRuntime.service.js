@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const qrcodeTerminal = require('qrcode-terminal');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, Message } = require('whatsapp-web.js');
+require('./whatsappMessageIdentity.service').installMessageIdentityCompatibility(Message);
 const env = require('../config/env');
 const logger = require('../utils/logger');
 const { ensureDir } = require('../utils/file');
@@ -240,7 +241,7 @@ const listAvailableGroups = async (client) => {
     .Chat
     .getModelsArray()
     .map((chat) => ({
-      id: chat.id?._serialized || '',
+      id: chat.id?._serialized || chat.id?.$1 || '',
       name: chat.formattedTitle || chat.name || chat.contact?.name || null,
     }))
     .filter((chat) => chat.id.endsWith('@g.us')));
@@ -623,6 +624,8 @@ module.exports = {
         await recordMessageError(error).catch(() => undefined);
         logger.error('Falha ao processar mensagem recebida no WhatsApp.', {
           error: error.message,
+          code: error.code || null,
+          stack: error.stack,
           chatId: message && message.from ? message.from : null,
         });
 

@@ -443,6 +443,18 @@ const findInvoiceInBackendApi = async (invoiceNumber, companyScopeHint = null) =
     companyScope,
   });
 
+  // A lookup may return a cross-company candidate. It is not a match for this
+  // group: let the existing alternate-company search create the mismatch alert.
+  const expectedCompanyId = Number(companyScope?.id || payload.company?.id || 0);
+  const invoiceCompanyId = Number(payload.invoice?.companyId || payload.invoice?.company_id || 0);
+  if (payload.found && expectedCompanyId > 0 && invoiceCompanyId > 0 && expectedCompanyId !== invoiceCompanyId) {
+    return {
+      found: false, invoice: null, deliveryContext: buildEmptyDeliveryContext(),
+      mode: 'backend_api', reason: 'invoice_company_mismatch',
+      company: payload.company || companyScope,
+    };
+  }
+
   return {
     found: !!payload.found,
     invoice: payload.invoice || null,

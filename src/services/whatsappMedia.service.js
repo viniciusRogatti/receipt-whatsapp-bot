@@ -1,11 +1,20 @@
 const fs = require('fs/promises');
 const path = require('path');
 const env = require('../config/env');
+const { downloadPhoto } = require('./whatsappPhotoDownload.service');
 
 // Keep the downloaded evidence until the backend has finished receiving it.
 // Message IDs and incoming filenames are never used as filesystem paths.
 async function withDownloadedPhoto(message, consume) {
-  const media = await message.downloadMedia();
+  let media;
+  try {
+    media = await downloadPhoto(message);
+  } catch (cause) {
+    const error = new Error(`Falha ao baixar a foto do WhatsApp: ${cause?.message || cause}`);
+    error.code = 'WHATSAPP_MEDIA_DOWNLOAD_FAILED';
+    error.cause = cause;
+    throw error;
+  }
   const extension = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[media?.mimetype];
   if (!extension || typeof media?.data !== 'string' || !media.data.length) {
     throw new Error('A foto do WhatsApp não pôde ser baixada em formato suportado.');

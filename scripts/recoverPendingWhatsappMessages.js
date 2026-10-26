@@ -1,4 +1,8 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, Message } = require('whatsapp-web.js');
+require('../src/services/whatsappMessageIdentity.service').installMessageIdentityCompatibility(Message);
+const { installReadyRecovery } = require('../src/services/whatsappReadyRecovery.service');
+const { recoverPhoto } = require('../src/services/whatsappRecovery.service');
+const logger = require('../src/utils/logger');
 const env = require('../src/config/env');
 const whatsappService = require('../src/services/whatsapp.service');
 const { isGroupAllowed, resolveWhatsappGroupPolicy } = require('../src/services/whatsappRuntimeSupport.service');
@@ -14,6 +18,10 @@ const targetDate = String(args.date || new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit',
 }).format(new Date())).trim();
 const fetchLimit = Math.max(100, Math.min(2000, Number(args.limit || 1000) || 1000));
+const dryRun = args['dry-run'] === 'true';
+const maxPhotos = dryRun ? Math.max(1, Number(args['max-photos'] || 1)) : Infinity;
+const targetInvoice = String(args.invoice || '').trim().replace(/^0+(?=\d)/, '');
+const targetCompany = String(args.company || '').trim();
 let recoveryClient = null;
 
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -60,7 +68,7 @@ const listRawGroups = (client) => evaluateWhatsappPage(client, () => window
   .Chat
   .getModelsArray()
   .map((chat) => ({
-    id: chat.id?._serialized || '',
+    id: chat.id?._serialized || chat.id?.$1 || '',
     name: chat.formattedTitle || chat.name || chat.contact?.name || null,
   }))
   .filter((chat) => chat.id.endsWith('@g.us')));
@@ -82,15 +90,16 @@ const fetchRawMessages = (client, groupId, limit) => evaluateWhatsappPage(client
       break;
     }
     if (!loaded?.length) break;
-    const knownIds = new Set(messages.map((message) => message.id?._serialized || String(message.id || '')));
-    const newMessages = loaded.filter((message) => !knownIds.has(message.id?._serialized || String(message.id || '')));
+    const messageId = (message) => message.id?._serialized || message.id?.$1 || message.id?.id;
+    const knownIds = new Set(messages.map(messageId));
+    const newMessages = loaded.filter((message) => !knownIds.has(messageId(message)));
     if (!newMessages.length) break;
     messages = [...newMessages, ...messages];
   }
 
   messages.sort((left, right) => Number(left.t || 0) - Number(right.t || 0));
   return messages.slice(-fetchCount).map((message) => ({
-    id: message.id?._serialized || String(message.id || ''),
+    id: message.id?._serialized || message.id?.$1 || '',
     mediaId: message.id?.id || null,
     fromMe: Boolean(message.id?.fromMe),
     isNotification: Boolean(message.isNotification),
@@ -98,6 +107,7 @@ const fetchRawMessages = (client, groupId, limit) => evaluateWhatsappPage(client
     hasMedia: Boolean(message.directPath),
     type: String(message.type || '').toLowerCase(),
     body: String(message.caption || message.body || ''),
+    author: message.author?._serialized || message.author?.$1 || (typeof message.author === 'string' ? message.author : null),
   }));
 }, { chatId: groupId, fetchCount: limit });
 
@@ -115,8 +125,10 @@ const buildClient = () => new Client({
 
 async function main() {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) throw new Error('Use --date=YYYY-MM-DD.');
+  if (targetInvoice && !/^\d{1,9}$/.test(targetInvoice)) throw new Error('Use --invoice com somente os dígitos da NF.');
 
   const client = buildClient();
+  installReadyRecovery(client, logger);
   recoveryClient = client;
   const summary = {
     date: targetDate,
@@ -129,6 +141,8 @@ async function main() {
     ignored: 0,
     review: 0,
     failed: 0,
+    downloaded: 0,
+    dryRun,
   };
 
   await new Promise((resolve, reject) => {
@@ -139,6 +153,9 @@ async function main() {
       if (recoveryStarted) return;
       recoveryStarted = true;
       try {
+        // Use the same backend-owned group policies as the live listener.
+        const policies = await require('../src/services/api.service').getWhatsappGroupPolicies();
+        if (policies?.policies && Object.keys(policies.policies).length) env.whatsappGroupPolicies = policies.policies;
         const configuredGroupIds = Array.from(new Set([
           ...env.whatsappAllowedGroupIds,
           ...Object.keys(env.whatsappGroupPolicies || {}).filter((key) => String(key).endsWith('@g.us')),
@@ -176,30 +193,36 @@ async function main() {
         const groups = Array.from(groupsById.values());
         summary.groups = groups.length;
         for (const chat of groups) {
+          if (targetCompany && resolveWhatsappGroupPolicy({ groupId: chat.id, groupName: chat.name, groupPolicies: env.whatsappGroupPolicies }).companyCode !== targetCompany) continue;
+          if (dryRun && summary.downloaded >= maxPhotos) break;
           // eslint-disable-next-line no-await-in-loop
           const messages = await fetchRawMessages(client, chat.id, fetchLimit);
+          if (messages.length === fetchLimit && messages[0] && isTargetDate(messages[0].timestamp)) {
+            throw new Error('O histórico atingiu o limite antes de cobrir todo o dia. Amplie --limit antes de recuperar.');
+          }
           const todayMessages = messages.filter((message) => isTargetDate(message.timestamp) && !message.fromMe && !message.isNotification);
           summary.messages += todayMessages.length;
 
           for (const message of todayMessages) {
+            if (targetInvoice && messageText(message).replace(/^0+(?=\d)/, '') !== targetInvoice) continue;
+            if (dryRun && summary.downloaded >= maxPhotos) break;
             if (!message.hasMedia || (message.type && message.type !== 'image')) continue;
             summary.photos += 1;
             try {
-              const groupId = chat.id;
-              const result = await whatsappService.handleIncomingTextMessage({
-                message: {
-                  id: message.id?._serialized || String(message.id || ''),
-                  groupId,
-                  groupName: chat.name || null,
-                  chatId: groupId,
-                  mediaId: message.mediaId,
-                  timestamp: Number(message.timestamp || 0) * 1000,
-                  messageText: messageText(message),
-                  caption: messageText(message),
-                  body: messageText(message),
-                  hasPhoto: true,
-                },
+              if (!message.id) throw new Error('Identificador original da foto indisponível.');
+              const sdkMessage = new Message(client, {
+                id: { _serialized: message.id, id: message.mediaId, fromMe: false },
+                from: chat.id, author: message.author, t: message.timestamp,
+                type: 'image', directPath: true, caption: messageText(message),
               });
+              const result = await recoverPhoto({
+                message: sdkMessage, group: chat,
+                policy: resolveWhatsappGroupPolicy({ groupId: chat.id, groupName: chat.name, groupPolicies: env.whatsappGroupPolicies }),
+                processReceipt: (payload) => whatsappService.handleIncomingTextMessage(payload),
+                dryRun,
+              });
+
+              if (result?.downloaded) { summary.downloaded += 1; continue; }
 
               if (result?.ignored) {
                 summary.ignored += 1;
@@ -215,7 +238,8 @@ async function main() {
               } else if (result?.backendSync?.action === 'create_receipt_alert') summary.review += 1;
             } catch (error) {
               summary.failed += 1;
-              console.error(`Falha ao recuperar mensagem ${message.id || '-'}: ${error.message}`);
+              console.error(`Falha ao recuperar mensagem ${message.id || '-'}: ${error.stack || error.message}`);
+              if (dryRun) throw error;
             }
           }
         }

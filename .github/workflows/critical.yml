@@ -1,0 +1,26 @@
+name: Fluxos críticos
+on:
+  pull_request:
+  push:
+    branches-ignore: [gh-pages]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  critical:
+    name: bot-critical
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20.19.5'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:critical

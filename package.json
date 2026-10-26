@@ -19,7 +19,8 @@
     "import:recovery:receipts": "node scripts/importRecoveredReceiptsToPage.js",
     "test": "node src/tests/runUnitTests.js",
     "test:local": "node src/tests/localImageRunner.js",
-    "test:unit": "node src/tests/runUnitTests.js"
+    "test:unit": "node src/tests/runUnitTests.js",
+    "test:critical": "node src/tests/runCritical.cjs"
   },
   "engines": {
     "node": ">=18"

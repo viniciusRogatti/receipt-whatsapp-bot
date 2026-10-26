@@ -74,7 +74,9 @@ const normalizeMessageIdCandidate = (value) => {
 const resolveWhatsappMessageId = (message = {}) => {
   const serializedId = [
     message.id?._serialized,
+    message.id?.$1,
     message._data?.id?._serialized,
+    message._data?.id?.$1,
   ]
     .map(normalizeMessageIdCandidate)
     .find(Boolean);
